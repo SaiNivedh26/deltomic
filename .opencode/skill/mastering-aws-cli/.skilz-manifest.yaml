@@ -1,0 +1,8 @@
+installed_at: '2026-08-01T07:02:52+00:00'
+skill_id: git/mastering-aws-cli
+git_repo: https://github.com/SpillwaveSolutions/mastering-aws-cli
+skill_path: /tmp/skilz-git-q81m_e_7
+git_sha: 87f407bf571fae95fd920a351e0690199b548ff1
+skilz_version: 1.10.0
+install_mode: copy
+canonical_path: null

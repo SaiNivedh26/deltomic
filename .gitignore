@@ -1,3 +1,6 @@
 .env
 del/
 __pycache__/
+agent-connect-remote/__pycache__/
+agent-connect-remote/.env
+
