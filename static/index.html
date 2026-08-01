@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent - Sandwich Shop</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 { margin-bottom: 1rem; font-size: 1.8rem; }
+        #status {
+            font-size: 0.9rem;
+            color: #888;
+            margin-bottom: 1.5rem;
+        }
+        #transcript {
+            width: 90%;
+            max-width: 500px;
+            min-height: 120px;
+            background: #16213e;
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            overflow-y: auto;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .partial { color: #aaa; }
+        .final { color: #e0e0e0; }
+        .agent { color: #6fd6a3; }
+        #controls { display: flex; gap: 1rem; }
+        button {
+            padding: 0.8rem 2rem;
+            border: none;
+            border-radius: 50px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        #mic {
+            background: #e94560;
+            color: white;
+        }
+        #mic:hover { background: #c73650; }
+        #mic.recording {
+            background: #6fd6a3;
+            color: #1a1a2e;
+        }
+        #mic.recording::before { content: "Stop"; }
+        #mic:not(.recording)::before { content: "Start"; }
+        audio { display: none; }
+        #debug {
+            width: 90%;
+            max-width: 500px;
+            max-height: 150px;
+            overflow-y: auto;
+            background: #0d1117;
+            border-radius: 8px;
+            padding: 0.5rem;
+            margin-top: 1rem;
+            font-size: 0.75rem;
+            font-family: monospace;
+            color: #58a6ff;
+        }
+        .log-line { margin-bottom: 2px; }
+        .log-err { color: #f85149; }
+        .log-ok { color: #56d364; }
+    </style>
+</head>
+<body>
+    <h1>Sub Shop Voice Agent</h1>
+    <div id="status">Click Start and speak your order</div>
+    <div id="transcript"></div>
+    <div id="controls">
+        <button id="mic"></button>
+    </div>
+    <audio id="audio" autoplay></audio>
+    <div id="debug"></div>
+
+    <script>
+        const micButton = document.getElementById('mic');
+        const statusEl = document.getElementById('status');
+        const transcriptEl = document.getElementById('transcript');
+        const debugEl = document.getElementById('debug');
+
+        let ws = null;
+        let audioContext = null;
+        let audioQueue = [];
+        let isPlaying = false;
+        let chunksSent = 0;
+
+        function log(msg, type) {
+            const div = document.createElement('div');
+            div.className = 'log-line' + (type ? ' log-' + type : '');
+            const ts = new Date().toLocaleTimeString();
+            div.textContent = `[${ts}] ${msg}`;
+            debugEl.appendChild(div);
+            debugEl.scrollTop = debugEl.scrollHeight;
+            console.log(msg);
+        }
+
+        function appendTranscript(text, type) {
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = text;
+            transcriptEl.appendChild(div);
+            transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        }
+
+        async function playAudioQueue() {
+            if (isPlaying || audioQueue.length === 0) return;
+            isPlaying = true;
+            const chunk = audioQueue.shift();
+            const arrayBuf = new Uint8Array(chunk);
+            const audioBuf = audioContext.createBuffer(1, arrayBuf.length / 2, 24000);
+            const channelData = audioBuf.getChannelData(0);
+            for (let i = 0; i < arrayBuf.length - 1; i += 2) {
+                let sample = (arrayBuf[i + 1] << 8) | arrayBuf[i];
+                if (sample > 32767) sample -= 65536;
+                channelData[i / 2] = sample / 32768;
+            }
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuf;
+            source.connect(audioContext.destination);
+            source.onended = () => {
+                isPlaying = false;
+                playAudioQueue();
+            };
+            source.start();
+        }
+
+        async function startConversation() {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            log(`AudioContext: sampleRate=${audioContext.sampleRate}`);
+
+            const wsScheme = location.protocol === 'https:' ? 'wss' : 'ws';
+            ws = new WebSocket(`${wsScheme}://${location.host}/ws`);
+            ws.binaryType = 'arraybuffer';
+
+            ws.onopen = async () => {
+                log('WebSocket connected', 'ok');
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        audio: {
+                            channelCount: 1,
+                            sampleRate: 16000,
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                        }
+                    });
+                    log('Microphone access granted', 'ok');
+
+                    micButton.classList.add('recording');
+                    statusEl.textContent = 'Listening... speak now';
+
+                    const sourceNode = audioContext.createMediaStreamSource(stream);
+                    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+                    sourceNode.connect(processor);
+                    processor.connect(audioContext.destination);
+
+                    processor.onaudioprocess = (e) => {
+                        if (ws.readyState !== WebSocket.OPEN) return;
+                        const inputData = e.inputBuffer.getChannelData(0);
+                        const pcm = new ArrayBuffer(inputData.length * 2);
+                        const view = new DataView(pcm);
+                        let hasSignal = false;
+                        for (let i = 0; i < inputData.length; i++) {
+                            let s = Math.max(-1, Math.min(1, inputData[i]));
+                            if (Math.abs(s) > 0.01) hasSignal = true;
+                            s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                            view.setInt16(i * 2, s, true);
+                        }
+                        ws.send(pcm);
+                        chunksSent++;
+                        if (chunksSent % 100 === 0) {
+                            log(`Sent ${chunksSent} audio chunks, signal=${hasSignal}`);
+                        }
+                        if (chunksSent === 1) {
+                            log(`First audio chunk sent, size=${pcm.byteLength} signal=${hasSignal}`, 'ok');
+                        }
+                    };
+
+                    window._stream = stream;
+                    window._processor = processor;
+                    window._sourceNode = sourceNode;
+                } catch (err) {
+                    log(`Microphone error: ${err}`, 'err');
+                    statusEl.textContent = 'Mic access denied';
+                }
+            };
+
+            ws.onmessage = (event) => {
+                if (event.data instanceof ArrayBuffer) {
+                    audioQueue.push(event.data);
+                    log(`Received audio chunk: ${event.data.byteLength} bytes`, 'ok');
+                    playAudioQueue();
+                } else {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        log(`Server msg: ${JSON.stringify(msg)}`);
+                    } catch(e) {
+                        log(`Server msg: ${event.data}`);
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                log('WebSocket closed');
+                statusEl.textContent = 'Disconnected';
+                micButton.classList.remove('recording');
+                if (window._stream) window._stream.getTracks().forEach(t => t.stop());
+            };
+
+            ws.onerror = (err) => {
+                log(`WebSocket error: ${err}`, 'err');
+                statusEl.textContent = 'Connection error';
+            };
+        }
+
+        function stopConversation() {
+            if (window._processor) window._processor.disconnect();
+            if (window._sourceNode) window._sourceNode.disconnect();
+            if (window._stream) window._stream.getTracks().forEach(t => t.stop());
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+            micButton.classList.remove('recording');
+            statusEl.textContent = 'Click Start and speak your order';
+            log(`Total audio chunks sent: ${chunksSent}`);
+        }
+
+        micButton.addEventListener('click', () => {
+            if (micButton.classList.contains('recording')) {
+                stopConversation();
+            } else {
+                transcriptEl.innerHTML = '';
+                debugEl.innerHTML = '';
+                chunksSent = 0;
+                startConversation();
+            }
+        });
+    </script>
+</body>
+</html>

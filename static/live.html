@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sandwich Shop - Gemini Live Voice Agent</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+h1 { margin-bottom: 8px; font-size: 1.5em; color: #4285f4; }
+.subtitle { color: #888; font-size: 0.85em; margin-bottom: 20px; }
+#controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+#connectBtn { background: #4285f4; color: #fff; }
+#connectBtn:hover { background: #3367d6; }
+#connectBtn:disabled { background: #555; cursor: not-allowed; }
+#micBtn { background: #0f9d58; color: #fff; }
+#micBtn:hover { background: #0b7d45; }
+#micBtn:disabled { background: #555; cursor: not-allowed; }
+#micBtn.listening { background: #db4437; animation: pulse 1.5s infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+#status {
+  font-size: 0.85em;
+  color: #888;
+  margin-bottom: 12px;
+  text-align: center;
+}
+#transcript {
+  width: 100%;
+  max-width: 600px;
+  height: 300px;
+  overflow-y: auto;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.msg { margin-bottom: 8px; line-height: 1.4; }
+.msg.user { color: #f4b400; }
+.msg.user::before { content: "You: "; font-weight: 700; }
+.msg.assistant { color: #4285f4; }
+.msg.assistant::before { content: "Agent: "; font-weight: 700; }
+.msg.system { color: #666; font-style: italic; }
+.msg.tool { color: #0f9d58; font-size: 0.85em; }
+.msg.tool::before { content: "Tool: "; font-weight: 700; }
+#debug {
+  width: 100%;
+  max-width: 600px;
+  font-size: 0.75em;
+  color: #555;
+  max-height: 150px;
+  overflow-y: auto;
+  background: #0d0d1a;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 10px;
+  font-family: monospace;
+}
+</style>
+</head>
+<body>
+<h1>Sandwich Shop Voice Agent</h1>
+<p class="subtitle">Powered by Gemini Live API - real-time bidirectional voice</p>
+
+<div id="controls">
+  <button id="connectBtn">Connect</button>
+  <button id="micBtn" disabled>Start Talking</button>
+</div>
+
+<div id="status">Not connected</div>
+
+<div id="transcript"></div>
+<div id="debug"></div>
+
+<script>
+// ─── State ──────────────────────────────────────────────────
+let ws = null;
+let audioContext = null;
+let mediaStream = null;
+let workletNode = null;
+let playerWorklet = null;
+let playerContext = null;
+let isListening = false;
+
+// ─── DOM ─────────────────────────────────────────────────────
+const connectBtn = document.getElementById("connectBtn");
+const micBtn = document.getElementById("micBtn");
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const debugEl = document.getElementById("debug");
+
+// ─── Sandwich shop tools ──────────────────────────────────────
+const SANDWICH_SYSTEM_PROMPT = `You are a voice assistant for a sandwich shop. Help customers order sandwiches.
+
+Available items: Turkey Club, Italian BMT, Veggie Delight, Meatball Marinara, BLT, Roast Beef.
+
+Rules:
+- Keep responses short and conversational (this is voice, not text)
+- No emojis, no markdown
+- Ask clarifying questions when needed
+- Summarize the order before confirming
+
+Tools available: add_to_order and confirm_order. Use them when the customer wants to add items or confirm their order.`;
+
+const TOOL_DEFS = [
+  {
+    name: "add_to_order",
+    description: "Add an item to the customer's order",
+    parameters: {
+      type: "object",
+      properties: {
+        item: { type: "string", description: "The sandwich name" },
+        quantity: { type: "integer", description: "Number of this item" },
+      },
+      required: ["item", "quantity"],
+    },
+  },
+  {
+    name: "confirm_order",
+    description: "Confirm and finalize the customer's order",
+    parameters: {
+      type: "object",
+      properties: {
+        order_summary: { type: "string", description: "Summary of the full order" },
+      },
+      required: ["order_summary"],
+    },
+  },
+];
+
+// ─── Helper: logging ──────────────────────────────────────────
+function debug(msg) {
+  const ts = new Date().toLocaleTimeString();
+  debugEl.innerHTML += `[${ts}] ${msg}\n`;
+  debugEl.scrollTop = debugEl.scrollHeight;
+}
+
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = `msg ${cls}`;
+  div.textContent = text;
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// ─── Helper: base64 ───────────────────────────────────────────
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// ─── Connect to Gemini Live ──────────────────────────────────
+async function connect() {
+  debug("Fetching ephemeral token...");
+  statusEl.textContent = "Fetching token...";
+
+  const resp = await fetch("/api/token", { method: "POST" });
+  if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`);
+  const { token, model } = await resp.json();
+
+  debug(`Got token, model=${model}`);
+  statusEl.textContent = "Connecting to Gemini...";
+
+  const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    debug("WebSocket open — sending setup");
+    statusEl.textContent = "Setting up session...";
+
+    const setupMsg = {
+      setup: {
+        model: `models/${model}`,
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          temperature: 1.0,
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Puck" },
+            },
+          },
+        },
+        systemInstruction: { parts: [{ text: SANDWICH_SYSTEM_PROMPT }] },
+        tools: [{ functionDeclarations: TOOL_DEFS }],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            disabled: false,
+            silenceDurationMs: 2000,
+            prefixPaddingMs: 500,
+            endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
+            startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
+          },
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        },
+      },
+    };
+
+    ws.send(JSON.stringify(setupMsg));
+  };
+
+  ws.onmessage = async (event) => {
+    let jsonData;
+    if (event.data instanceof Blob) {
+      jsonData = await event.data.text();
+    } else if (event.data instanceof ArrayBuffer) {
+      jsonData = new TextDecoder().decode(event.data);
+    } else {
+      jsonData = event.data;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(jsonData);
+    } catch (e) {
+      debug(`JSON parse error: ${e}`);
+      return;
+    }
+
+    handleMessage(data);
+  };
+
+  ws.onerror = (e) => {
+    debug(`WebSocket error: ${e}`);
+    statusEl.textContent = "Connection error";
+  };
+
+  ws.onclose = (e) => {
+    debug(`WebSocket closed: code=${e.code} reason=${e.reason}`);
+    statusEl.textContent = "Disconnected";
+    connectBtn.textContent = "Connect";
+    connectBtn.disabled = false;
+    micBtn.disabled = true;
+    stopMic();
+  };
+}
+
+// ─── Handle Gemini Live messages ─────────────────────────────
+function handleMessage(data) {
+  const sc = data?.serverContent;
+  const parts = sc?.modelTurn?.parts;
+
+  // Setup complete
+  if (data?.setupComplete) {
+    debug("SETUP COMPLETE");
+    statusEl.textContent = "Connected — ready to talk!";
+    connectBtn.textContent = "Disconnect";
+    connectBtn.disabled = false;
+    micBtn.disabled = false;
+    addMsg("Connected! Click Start Talking to begin.", "system");
+    return;
+  }
+
+  // Tool call
+  if (data?.toolCall) {
+    debug(`Tool call: ${JSON.stringify(data.toolCall)}`);
+    handleToolCall(data.toolCall);
+    return;
+  }
+
+  // Audio from model
+  if (parts?.length) {
+    for (const part of parts) {
+      if (part.inlineData) {
+        playAudio(part.inlineData.data);
+      } else if (part.text) {
+        debug(`TEXT: ${part.text}`);
+      }
+    }
+  }
+
+  // Input transcription (user speech)
+  if (sc?.inputTranscription) {
+    const text = sc.inputTranscription.text || "";
+    if (text && !sc.inputTranscription.finished) {
+      addMsg(text, "user");
+    }
+  }
+
+  // Output transcription (agent speech)
+  if (sc?.outputTranscription) {
+    const text = sc.outputTranscription.text || "";
+    if (text && !sc.outputTranscription.finished) {
+      addMsg(text, "assistant");
+    }
+  }
+
+  // Interrupted
+  if (sc?.interrupted) {
+    debug("INTERRUPTED");
+    if (playerWorklet) playerWorklet.port.postMessage("interrupt");
+  }
+
+  // Turn complete
+  if (sc?.turnComplete) {
+    debug("TURN COMPLETE");
+  }
+}
+
+// ─── Tool call handling ──────────────────────────────────────
+function handleToolCall(toolCall) {
+  const functionResponses = [];
+
+  for (const fc of toolCall.functionCalls || []) {
+    const name = fc.name;
+    const args = fc.args || {};
+    debug(`Executing tool: ${name}(${JSON.stringify(args)})`);
+
+    let result;
+    if (name === "add_to_order") {
+      result = `Added ${args.quantity || 1}x ${args.item || "item"} to your order.`;
+      addMsg(`Added ${args.quantity || 1}x ${args.item || "item"}`, "tool");
+    } else if (name === "confirm_order") {
+      result = `Order confirmed: ${args.order_summary || "your items"}. Thank you!`;
+      addMsg(`Order confirmed: ${args.order_summary || ""}`, "tool");
+    } else {
+      result = "Unknown tool.";
+    }
+
+    functionResponses.push({
+      id: fc.id,
+      name: name,
+      response: { result },
+    });
+  }
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
+    debug("Sent tool response");
+  }
+}
+
+// ─── Audio playback (24kHz PCM from Gemini) ───────────────────
+async function initPlayer() {
+  if (playerContext) return;
+  playerContext = new AudioContext({ sampleRate: 24000 });
+  await playerContext.audioWorklet.addModule("audio-processors/playback.worklet.js");
+  playerWorklet = new AudioWorkletNode(playerContext, "pcm-processor");
+  playerWorklet.connect(playerContext.destination);
+  debug("Audio player initialized (24kHz)");
+}
+
+async function playAudio(base64Audio) {
+  if (!playerWorklet) await initPlayer();
+  if (playerContext.state === "suspended") await playerContext.resume();
+
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  const int16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  playerWorklet.port.postMessage(float32);
+}
+
+// ─── Audio capture (16kHz PCM to Gemini) ────────────────────
+async function startMic() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 16000,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    audioContext = new AudioContext({ sampleRate: 16000 });
+    await audioContext.audioWorklet.addModule("audio-processors/capture.worklet.js");
+    workletNode = new AudioWorkletNode(audioContext, "audio-capture-processor");
+
+    workletNode.port.onmessage = (event) => {
+      if (!isListening) return;
+      if (event.data.type === "audio") {
+        const pcm16 = convertToPCM16(event.data.data);
+        const base64 = arrayBufferToBase64(pcm16);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            realtimeInput: {
+              audio: { mimeType: "audio/pcm", data: base64 },
+            },
+          }));
+        }
+      }
+    };
+
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    source.connect(workletNode);
+
+    isListening = true;
+    micBtn.textContent = "Stop Talking";
+    micBtn.classList.add("listening");
+    debug("Mic started (16kHz)");
+    addMsg("[Microphone on]", "system");
+  } catch (e) {
+    debug(`Mic error: ${e.message}`);
+    addMsg(`Mic error: ${e.message}`, "system");
+  }
+}
+
+function stopMic() {
+  isListening = false;
+  if (workletNode) { workletNode.disconnect(); workletNode = null; }
+  if (audioContext) { audioContext.close(); audioContext = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  micBtn.textContent = "Start Talking";
+  micBtn.classList.remove("listening");
+  if (isListening) addMsg("[Microphone off]", "system");
+}
+
+function convertToPCM16(float32Array) {
+  const int16 = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16[i] = s * 0x7fff;
+  }
+  return int16.buffer;
+}
+
+// ─── Event listeners ─────────────────────────────────────────
+connectBtn.addEventListener("click", async () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.close();
+    ws = null;
+  } else {
+    try {
+      await connect();
+    } catch (e) {
+      debug(`Connect error: ${e.message}`);
+      statusEl.textContent = "Error: " + e.message;
+    }
+  }
+});
+
+micBtn.addEventListener("click", () => {
+  if (isListening) {
+    stopMic();
+  } else {
+    startMic();
+  }
+});
+
+debug("Page loaded. Click Connect to start.");
+</script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Meet + AI Voice Agent</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+h1 { color: #4285f4; margin-bottom: 8px; font-size: 1.6em; }
+.subtitle { color: #888; font-size: 0.85em; margin-bottom: 24px; }
+.card {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+  width: 100%;
+  max-width: 640px;
+}
+.card h2 { font-size: 1.1em; margin-bottom: 16px; color: #e0e0e0; }
+button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 1em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+button.primary { background: #4285f4; color: #fff; }
+button.primary:hover { background: #3367d6; }
+button.primary:disabled { background: #555; cursor: not-allowed; }
+button.danger { background: #db4437; color: #fff; }
+button.danger:hover { background: #b33; }
+button.danger:disabled { background: #555; cursor: not-allowed; }
+button.success { background: #0f9d58; color: #fff; }
+button.success:hover { background: #0b7d45; }
+button.success:disabled { background: #555; cursor: not-allowed; }
+input, select {
+  padding: 10px 12px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: #0d0d1a;
+  color: #e0e0e0;
+  font-size: 0.95em;
+  margin-bottom: 8px;
+  width: 100%;
+}
+label { display: block; font-size: 0.85em; color: #888; margin-bottom: 4px; margin-top: 8px; }
+.row { display: flex; gap: 12px; }
+.row > div { flex: 1; }
+#status { font-size: 0.85em; color: #888; margin: 8px 0; }
+.meet-link {
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.meet-link a { color: #4285f4; text-decoration: none; word-break: break-all; }
+.meet-link a:hover { text-decoration: underline; }
+.bot-status {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 600;
+}
+.bot-status.joining, .bot-status.in_waiting_room { background: #f4b400; color: #000; }
+.bot-status.in_call_recording, .bot-status.in_call_not_recording { background: #0f9d58; color: #fff; }
+.bot-status.done, .bot-status.fatal { background: #db4437; color: #fff; }
+.bot-status.unknown { background: #555; color: #fff; }
+#log {
+  font-family: monospace;
+  font-size: 0.75em;
+  color: #555;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #0d0d1a;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 10px;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-weight: 600;
+  margin-left: 6px;
+}
+.badge.ok { background: #0f9d58; color: #fff; }
+.badge.err { background: #db4437; color: #fff; }
+</style>
+</head>
+<body>
+<h1>Meet + AI Voice Agent</h1>
+<p class="subtitle">Create a Google Meet, send an AI voice agent to join and speak</p>
+
+<div class="card">
+  <h2>1. Create Meeting</h2>
+  <div class="row">
+    <div>
+      <label>Meeting Title</label>
+      <input id="meetingTitle" value="AI Voice Agent Meeting" />
+    </div>
+    <div>
+      <label>Duration (minutes)</label>
+      <input id="duration" type="number" value="30" />
+    </div>
+  </div>
+  <button class="primary" id="createBtn">Create Google Meet</button>
+  <div id="meetingResult" style="display:none;">
+    <label>Google Meet Link</label>
+    <div class="meet-link">
+      <a id="meetLink" target="_blank" href="#"></a>
+      <button class="success" id="copyLinkBtn">Copy</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>2. Send AI Agent to Join</h2>
+  <label>Public Agent URL (must be publicly accessible by Recall bot)</label>
+  <input id="agentUrl" placeholder="https://your-ngrok-url/agent.html" />
+  <p style="font-size:0.8em;color:#666;margin:4px 0 8px 0;">
+    The agent page will be loaded by the Recall bot in a headless browser.
+    It connects to Gemini Live, listens to meeting audio, and speaks responses.
+    Use ngrok or similar tunneling for local development.
+  </p>
+  <button class="success" id="joinBtn" disabled>Send Agent to Meeting</button>
+  <div id="botResult" style="display:none;">
+    <label>Bot Status</label>
+    <div id="status">
+      <span class="bot-status unknown" id="botStatus">unknown</span>
+      <span id="botId"></span>
+    </div>
+    <button class="primary" id="refreshBtn">Refresh Status</button>
+    <button class="danger" id="leaveBtn">Remove Bot</button>
+    <span id="joinMeetBadge"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Activity Log</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+const logEl = document.getElementById("log");
+const createBtn = document.getElementById("createBtn");
+const meetLink = document.getElementById("meetLink");
+const meetingResult = document.getElementById("meetingResult");
+const copyLinkBtn = document.getElementById("copyLinkBtn");
+const agentUrlInput = document.getElementById("agentUrl");
+const joinBtn = document.getElementById("joinBtn");
+const botResult = document.getElementById("botResult");
+const botStatusEl = document.getElementById("botStatus");
+const botIdEl = document.getElementById("botId");
+const refreshBtn = document.getElementById("refreshBtn");
+const leaveBtn = document.getElementById("leaveBtn");
+
+let currentMeetUrl = "";
+let currentBotId = "";
+let pollTimer = null;
+
+function log(msg) {
+  const ts = new Date().toLocaleTimeString();
+  logEl.innerHTML += `[${ts}] ${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setBotStatus(status) {
+  botStatusEl.textContent = status;
+  botStatusEl.className = "bot-status " + status;
+}
+
+// ─── Create Meeting ─────────────────────────────────────────
+createBtn.addEventListener("click", async () => {
+  createBtn.disabled = true;
+  createBtn.textContent = "Creating...";
+  log("Creating Google Meet via Composio...");
+
+  try {
+    const resp = await fetch("/api/create-meeting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary: document.getElementById("meetingTitle").value,
+        duration_minutes: parseInt(document.getElementById("duration").value),
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "Failed");
+
+    currentMeetUrl = data.meet_url;
+    meetLink.textContent = currentMeetUrl;
+    meetLink.href = currentMeetUrl;
+    meetingResult.style.display = "block";
+    joinBtn.disabled = false;
+
+    log(`Meet created: ${currentMeetUrl}`);
+    document.getElementById("joinMeetBadge").innerHTML = `<a href="${currentMeetUrl}" target="_blank" class="badge ok">Join Meet</a>`;
+  } catch (e) {
+    log(`Error: ${e.message}`);
+    alert("Failed to create meeting: " + e.message);
+  } finally {
+    createBtn.disabled = false;
+    createBtn.textContent = "Create Google Meet";
+  }
+});
+
+// ─── Copy Link ──────────────────────────────────────────────
+copyLinkBtn.addEventListener("click", () => {
+  navigator.clipboard.writeText(currentMeetUrl);
+  copyLinkBtn.textContent = "Copied!";
+  setTimeout(() => copyLinkBtn.textContent = "Copy", 2000);
+});
+
+// ─── Join Meeting ──────────────────────────────────────────
+joinBtn.addEventListener("click", async () => {
+  const agentUrl = agentUrlInput.value.trim();
+  if (!agentUrl) {
+    alert("Enter the public Agent URL (use ngrok to expose localhost)");
+    return;
+  }
+
+  joinBtn.disabled = true;
+  joinBtn.textContent = "Sending...";
+  log(`Creating Recall bot to join: ${currentMeetUrl}`);
+  log(`Agent URL: ${agentUrl}`);
+
+  try {
+    const resp = await fetch("/api/join-meeting", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        meeting_url: currentMeetUrl,
+        agent_url: agentUrl,
+        bot_name: "AI Voice Agent",
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(JSON.stringify(data.error) || "Failed");
+
+    currentBotId = data.bot_id;
+    botIdEl.textContent = `Bot ID: ${currentBotId}`;
+    botResult.style.display = "block";
+    setBotStatus("joining");
+    log(`Bot created: ${currentBotId}`);
+
+    startPolling();
+  } catch (e) {
+    log(`Error: ${e.message}`);
+    alert("Failed to create bot: " + e.message);
+  } finally {
+    joinBtn.disabled = false;
+    joinBtn.textContent = "Send Agent to Meeting";
+  }
+});
+
+// ─── Poll Bot Status ────────────────────────────────────────
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(updateBotStatus, 5000);
+  updateBotStatus();
+}
+
+async function updateBotStatus() {
+  if (!currentBotId) return;
+  try {
+    const resp = await fetch(`/api/bot/${currentBotId}`);
+    const data = await resp.json();
+    if (!resp.ok) return;
+
+    const status = data.status;
+    setBotStatus(status);
+    log(`Bot status: ${status}`);
+
+    if (status === "in_call_recording" || status === "in_call_not_recording") {
+      log("Agent is IN the call!");
+    }
+    if (status === "done" || status === "fatal") {
+      log("Bot finished. Stopping poll.");
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  } catch (e) {
+    // ignore poll errors
+  }
+}
+
+// ─── Refresh Status ────────────────────────────────────────
+refreshBtn.addEventListener("click", updateBotStatus);
+
+// ─── Leave Meeting ──────────────────────────────────────────
+leaveBtn.addEventListener("click", async () => {
+  if (!currentBotId) return;
+  if (!confirm("Remove the bot from the meeting?")) return;
+
+  leaveBtn.disabled = true;
+  log("Removing bot from call...");
+
+  try {
+    const resp = await fetch(`/api/leave-meeting/${currentBotId}`, { method: "POST" });
+    const data = await resp.json();
+    log(`Leave result: ${JSON.stringify(data)}`);
+    setBotStatus("done");
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  } catch (e) {
+    log(`Leave error: ${e.message}`);
+  } finally {
+    leaveBtn.disabled = false;
+  }
+});
+
+// ─── Auto-fill agent URL with ngrok URL ───────────────────────
+const NGROK_URL = "https://egregious-gale-unmusically.ngrok-free.dev";
+agentUrlInput.value = `${NGROK_URL}/agent.html`;
+log(`Page loaded. Agent URL auto-filled: ${agentUrlInput.value}`);
+</script>
+</body>
+</html>

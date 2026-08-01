@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Voice Agent — Recall Bot</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", sans-serif;
+  background: #0a0a1a;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 10px;
+  width: 1280px;
+  height: 720px;
+  overflow: hidden;
+}
+#status {
+  font-size: 1.2em;
+  color: #4285f4;
+  margin-bottom: 12px;
+  text-align: center;
+}
+#transcript {
+  width: 90%;
+  max-width: 800px;
+  height: 200px;
+  overflow-y: auto;
+  background: #111;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  font-size: 0.9em;
+}
+.msg { margin-bottom: 4px; line-height: 1.3; }
+.msg.user { color: #f4b400; }
+.msg.assistant { color: #4285f4; }
+.msg.system { color: #666; font-style: italic; }
+.msg.tool { color: #0f9d58; font-size: 0.85em; }
+#logo {
+  width: 120px; height: 120px;
+  background: linear-gradient(135deg, #4285f4, #0f9d58);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 12px;
+  font-size: 3em;
+}
+.pulse { animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+.chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 0.75em;
+  margin: 2px;
+}
+.chip.connected { background: #0f9d58; color: #fff; }
+.chip.disconnected { background: #555; color: #fff; }
+.chip.connecting { background: #f4b400; color: #000; }
+</style>
+</head>
+<body>
+<div id="logo">AI</div>
+<div id="status">Initializing...</div>
+<div style="margin-bottom: 8px;">
+  <span class="chip disconnected" id="geminiChip">Gemini: Disconnected</span>
+  <span class="chip disconnected" id="micChip">Mic: Off</span>
+  <span class="chip disconnected" id="meetingChip">Meeting Audio: Off</span>
+</div>
+<div id="transcript"></div>
+
+<script>
+// ─── State ──────────────────────────────────────────────────
+let ws = null;
+let audioContext = null;
+let meetingAudioContext = null;
+let mediaStream = null;
+let workletNode = null;
+let playerWorklet = null;
+let playerContext = null;
+let isConnected = false;
+let isReceiving = false;
+
+const SYSTEM_PROMPT = `You are a voice assistant for a sandwich shop called "Delight Sandwiches". You are currently in a Google Meet call and your audio is being played to meeting participants.
+
+Available items: Turkey Club, Italian BMT, Veggie Delight, Meatball Marinara, BLT, Roast Beef.
+
+Rules:
+- Keep responses short and conversational — this is a LIVE voice call, not text chat
+- No emojis, no markdown, no bullet points
+- Greet people warmly and ask how you can help
+- Ask clarifying questions when the order is unclear
+- Summarize the order before confirming
+- If someone is just saying hello, say hi back and offer to help with their order
+
+Tools available: add_to_order and confirm_order.`;
+
+const TOOL_DEFS = [
+  {
+    name: "add_to_order",
+    description: "Add an item to the customer's order",
+    parameters: {
+      type: "object",
+      properties: {
+        item: { type: "string", description: "The sandwich name" },
+        quantity: { type: "integer", description: "Number of this item" },
+      },
+      required: ["item", "quantity"],
+    },
+  },
+  {
+    name: "confirm_order",
+    description: "Confirm and finalize the customer's order",
+    parameters: {
+      type: "object",
+      properties: {
+        order_summary: { type: "string", description: "Summary of the full order" },
+      },
+      required: ["order_summary"],
+    },
+  },
+];
+
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const geminiChip = document.getElementById("geminiChip");
+const micChip = document.getElementById("micChip");
+const meetingChip = document.getElementById("meetingChip");
+
+// ─── Helpers ─────────────────────────────────────────────────
+function setStatus(msg) { statusEl.textContent = msg; }
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = `msg ${cls}`;
+  div.textContent = text;
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function setChip(el, state, label) {
+  el.className = `chip ${state}`;
+  el.textContent = label;
+}
+
+// ─── Get meeting audio via Recall bot's auto-granted getUserMedia ─
+// Recall automatically grants mic permissions for the bot's webpage.
+// This gives us the meeting audio stream.
+async function getMeetingAudio() {
+  try {
+    setStatus("Getting meeting audio...");
+    setChip(meetingChip, "connecting", "Meeting Audio: Connecting...");
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+
+    // Read tracks to verify
+    const tracks = mediaStream.getAudioTracks();
+    console.log("Meeting audio tracks:", tracks.length);
+    if (tracks.length > 0) {
+      console.log("Track settings:", tracks[0].getSettings());
+    }
+
+    setChip(meetingChip, "connected", "Meeting Audio: On");
+    setStatus("Meeting audio connected");
+    addMsg("[Meeting audio connected]", "system");
+    return true;
+  } catch (e) {
+    console.error("getUserMedia error:", e);
+    setChip(meetingChip, "disconnected", "Meeting Audio: Failed");
+    addMsg(`Meeting audio error: ${e.message}`, "system");
+    return false;
+  }
+}
+
+// ─── Audio playback (24kHz PCM from Gemini) ───────────────────
+async function initPlayer() {
+  if (playerContext) return;
+  playerContext = new AudioContext({ sampleRate: 24000 });
+  await playerContext.audioWorklet.addModule("audio-processors/playback.worklet.js");
+  playerWorklet = new AudioWorkletNode(playerContext, "pcm-processor");
+  playerWorklet.connect(playerContext.destination);
+}
+
+async function playAudio(base64Audio) {
+  if (!playerWorklet) await initPlayer();
+  if (playerContext.state === "suspended") await playerContext.resume();
+
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  const int16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+  playerWorklet.port.postMessage(float32);
+  isReceiving = true;
+}
+
+// ─── Send meeting audio to Gemini ────────────────────────────
+async function startSendingToGemini() {
+  if (!mediaStream) return;
+
+  // Create audio context at 16kHz for Gemini
+  audioContext = new AudioContext({ sampleRate: 16000 });
+  await audioContext.audioWorklet.addModule("audio-processors/capture.worklet.js");
+  workletNode = new AudioWorkletNode(audioContext, "audio-capture-processor");
+
+  workletNode.port.onmessage = (event) => {
+    if (event.data.type === "audio") {
+      const pcm16 = convertToPCM16(event.data.data);
+      const base64 = arrayBufferToBase64(pcm16);
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          realtimeInput: {
+            audio: { mimeType: "audio/pcm", data: base64 },
+          },
+        }));
+      }
+    }
+  };
+
+  const source = audioContext.createMediaStreamSource(mediaStream);
+  source.connect(workletNode);
+  setChip(micChip, "connected", "Mic: Streaming to Gemini");
+  addMsg("[Streaming meeting audio to Gemini]", "system");
+}
+
+function convertToPCM16(float32Array) {
+  const int16 = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16[i] = s * 0x7fff;
+  }
+  return int16.buffer;
+}
+
+// ─── Connect to Gemini Live ─────────────────────────────────
+async function connectGemini() {
+  setStatus("Fetching Gemini token...");
+  setChip(geminiChip, "connecting", "Gemini: Getting token...");
+
+  // Determine the server URL for token requests.
+  // When loaded by the Recall bot, window.location.origin is the public URL (e.g. ngrok).
+  const tokenUrl = window.location.origin + "/api/token";
+
+  const resp = await fetch(tokenUrl, { method: "POST" });
+  if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`);
+  const { token, model } = await resp.json();
+
+  setStatus("Connecting to Gemini Live...");
+  setChip(geminiChip, "connecting", "Gemini: Connecting...");
+
+  const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    const setupMsg = {
+      setup: {
+        model: `models/${model}`,
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          temperature: 1.0,
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Puck" },
+            },
+          },
+        },
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        tools: [{ functionDeclarations: TOOL_DEFS }],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            disabled: false,
+            silenceDurationMs: 2000,
+            prefixPaddingMs: 500,
+            endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
+            startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
+          },
+          turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+        },
+      },
+    };
+    ws.send(JSON.stringify(setupMsg));
+  };
+
+  ws.onmessage = async (event) => {
+    let jsonData;
+    if (event.data instanceof Blob) {
+      jsonData = await event.data.text();
+    } else if (event.data instanceof ArrayBuffer) {
+      jsonData = new TextDecoder().decode(event.data);
+    } else {
+      jsonData = event.data;
+    }
+
+    let data;
+    try {
+      data = JSON.parse(jsonData);
+    } catch (e) {
+      return;
+    }
+    handleMessage(data);
+  };
+
+  ws.onerror = () => {
+    setChip(geminiChip, "disconnected", "Gemini: Error");
+    setStatus("Gemini connection error");
+  };
+
+  ws.onclose = (e) => {
+    isConnected = false;
+    setChip(geminiChip, "disconnected", "Gemini: Disconnected");
+    setStatus(`Disconnected (code=${e.code})`);
+    // Attempt reconnect after 3s
+    setTimeout(() => {
+      if (!isConnected) {
+        addMsg("[Reconnecting to Gemini...]", "system");
+        connectGemini();
+      }
+    }, 3000);
+  };
+}
+
+// ─── Handle Gemini Live messages ─────────────────────────────
+function handleMessage(data) {
+  const sc = data?.serverContent;
+
+  if (data?.setupComplete) {
+    isConnected = true;
+    setChip(geminiChip, "connected", "Gemini: Connected");
+    setStatus("Connected — waiting for meeting audio");
+    addMsg("[Gemini Live connected]", "system");
+
+    // Start sending meeting audio to Gemini
+    startSendingToGemini();
+    return;
+  }
+
+  if (data?.toolCall) {
+    handleToolCall(data.toolCall);
+    return;
+  }
+
+  const parts = sc?.modelTurn?.parts;
+  if (parts?.length) {
+    for (const part of parts) {
+      if (part.inlineData) {
+        playAudio(part.inlineData.data);
+      } else if (part.text) {
+        console.log("TEXT:", part.text);
+      }
+    }
+  }
+
+  if (sc?.inputTranscription) {
+    const text = sc.inputTranscription.text || "";
+    if (text && !sc.inputTranscription.finished) {
+      addMsg(text, "user");
+    }
+  }
+
+  if (sc?.outputTranscription) {
+    const text = sc.outputTranscription.text || "";
+    if (text && !sc.outputTranscription.finished) {
+      addMsg(text, "assistant");
+    }
+  }
+
+  if (sc?.interrupted) {
+    if (playerWorklet) playerWorklet.port.postMessage("interrupt");
+  }
+}
+
+// ─── Tool call handling ──────────────────────────────────────
+function handleToolCall(toolCall) {
+  const functionResponses = [];
+
+  for (const fc of toolCall.functionCalls || []) {
+    const name = fc.name;
+    const args = fc.args || {};
+
+    let result;
+    if (name === "add_to_order") {
+      result = `Added ${args.quantity || 1}x ${args.item || "item"} to your order.`;
+      addMsg(`Added ${args.quantity || 1}x ${args.item || "item"}`, "tool");
+    } else if (name === "confirm_order") {
+      result = `Order confirmed: ${args.order_summary || "your items"}. Thank you!`;
+      addMsg(`Order confirmed: ${args.order_summary || ""}`, "tool");
+    } else {
+      result = "Unknown tool.";
+    }
+
+    functionResponses.push({
+      id: fc.id,
+      name: name,
+      response: { result },
+    });
+  }
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
+  }
+}
+
+// ─── Boot sequence ────────────────────────────────────────────
+async function boot() {
+  setStatus("Booting agent...");
+  addMsg("[Agent booting up]", "system");
+
+  // 1. Get meeting audio from Recall bot's auto-granted getUserMedia
+  const gotAudio = await getMeetingAudio();
+
+  // 2. Connect to Gemini Live
+  try {
+    await connectGemini();
+  } catch (e) {
+    setStatus("Failed to connect to Gemini: " + e.message);
+    addMsg(`Gemini error: ${e.message}`, "system");
+    // Retry after 5s
+    setTimeout(boot, 5000);
+    return;
+  }
+
+  // 3. If we didn't get meeting audio, still try to send a greeting
+  //    The agent can still speak even without receiving audio
+  if (!gotAudio) {
+    addMsg("[No meeting audio — agent will listen when available]", "system");
+    setTimeout(() => {
+      if (!isReceiving && ws && ws.readyState === WebSocket.OPEN) {
+        // Send a greeting prompt
+        ws.send(JSON.stringify({
+          clientContent: {
+            parts: [{ text: "Greet the meeting participants and offer to take their sandwich order." }],
+            turnComplete: true,
+          },
+        }));
+      }
+    }, 3000);
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
