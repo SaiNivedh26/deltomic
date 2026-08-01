@@ -87,42 +87,60 @@ let playerContext = null;
 let isConnected = false;
 let isReceiving = false;
 
-const SYSTEM_PROMPT = `You are a voice assistant for a sandwich shop called "Delight Sandwiches". You are currently in a Google Meet call and your audio is being played to meeting participants.
+const urlParams = new URLSearchParams(window.location.search);
+const AGENT_ID = urlParams.get('agent') || 'unknown';
+const GRANT_ID = urlParams.get('grant') || '';
+const BACKEND_URL = window.location.origin;
 
-Available items: Turkey Club, Italian BMT, Veggie Delight, Meatball Marinara, BLT, Roast Beef.
+const SYSTEM_PROMPT = `You are a remote support agent helping a customer with their server issue. You are currently in a Google Meet call and your audio is being played to meeting participants.
+
+Your role:
+1. Greet the customer and ask them to describe their problem
+2. Listen carefully and ask clarifying questions
+3. Use the run_command tool to execute diagnostic commands on their machine
+4. Explain what you find and what you're doing
+5. Create any necessary scripts or fixes
+6. When done, use revoke_access to end the session
+
+Available tools:
+- run_command(command): Execute a command on their machine
+- list_available_commands(): See what commands are allowed
+- revoke_access(): End the session when done
 
 Rules:
 - Keep responses short and conversational — this is a LIVE voice call, not text chat
 - No emojis, no markdown, no bullet points
-- Greet people warmly and ask how you can help
-- Ask clarifying questions when the order is unclear
-- Summarize the order before confirming
-- If someone is just saying hello, say hi back and offer to help with their order
-
-Tools available: add_to_order and confirm_order.`;
+- Be empathetic and thorough
+- Show command output and explain what you're doing at each step`;
 
 const TOOL_DEFS = [
   {
-    name: "add_to_order",
-    description: "Add an item to the customer's order",
+    name: "run_command",
+    description: "Execute a command on the customer's machine",
     parameters: {
       type: "object",
       properties: {
-        item: { type: "string", description: "The sandwich name" },
-        quantity: { type: "integer", description: "Number of this item" },
+        command: { type: "string", description: "The command to execute" },
       },
-      required: ["item", "quantity"],
+      required: ["command"],
     },
   },
   {
-    name: "confirm_order",
-    description: "Confirm and finalize the customer's order",
+    name: "list_available_commands",
+    description: "List all commands that are allowed to run",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "revoke_access",
+    description: "End the support session and revoke access",
     parameters: {
       type: "object",
       properties: {
-        order_summary: { type: "string", description: "Summary of the full order" },
+        reason: { type: "string", description: "Reason for ending" },
       },
-      required: ["order_summary"],
     },
   },
 ];
@@ -392,22 +410,51 @@ function handleMessage(data) {
 }
 
 // ─── Tool call handling ──────────────────────────────────────
-function handleToolCall(toolCall) {
+async function handleToolCall(toolCall) {
   const functionResponses = [];
 
   for (const fc of toolCall.functionCalls || []) {
     const name = fc.name;
     const args = fc.args || {};
-
     let result;
-    if (name === "add_to_order") {
-      result = `Added ${args.quantity || 1}x ${args.item || "item"} to your order.`;
-      addMsg(`Added ${args.quantity || 1}x ${args.item || "item"}`, "tool");
-    } else if (name === "confirm_order") {
-      result = `Order confirmed: ${args.order_summary || "your items"}. Thank you!`;
-      addMsg(`Order confirmed: ${args.order_summary || ""}`, "tool");
-    } else {
-      result = "Unknown tool.";
+
+    try {
+      if (name === "run_command") {
+        const resp = await fetch(`${BACKEND_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: `Execute command: ${args.command}`,
+            grant_id: GRANT_ID,
+          }),
+        });
+        const data = await resp.json();
+        result = data.response || "Command executed";
+        addMsg(`Executed: ${args.command}`, "tool");
+      } else if (name === "list_available_commands") {
+        const resp = await fetch(`${BACKEND_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "List available commands",
+            grant_id: GRANT_ID,
+          }),
+        });
+        const data = await resp.json();
+        result = data.response || "Commands listed";
+        addMsg("Listed available commands", "tool");
+      } else if (name === "revoke_access") {
+        const resp = await fetch(`${BACKEND_URL}/sessions/${AGENT_ID}/end`, {
+          method: "POST",
+        });
+        result = "Access revoked, session ended";
+        addMsg("Session ended", "tool");
+      } else {
+        result = "Unknown tool.";
+      }
+    } catch (e) {
+      console.error("Tool error:", e);
+      result = `Error: ${e.message}`;
     }
 
     functionResponses.push({
@@ -450,7 +497,7 @@ async function boot() {
         // Send a greeting prompt
         ws.send(JSON.stringify({
           clientContent: {
-            parts: [{ text: "Greet the meeting participants and offer to take their sandwich order." }],
+            parts: [{ text: "Greet the customer and ask how you can help with their server issue." }],
             turnComplete: true,
           },
         }));

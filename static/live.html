@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sandwich Shop - Gemini Live Voice Agent</title>
+<title>Remote Support - Voice Agent</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -18,6 +18,7 @@ body {
 }
 h1 { margin-bottom: 8px; font-size: 1.5em; color: #4285f4; }
 .subtitle { color: #888; font-size: 0.85em; margin-bottom: 20px; }
+#session-info { color: #0f9d58; font-size: 0.8em; margin-bottom: 10px; }
 #controls {
   display: flex;
   gap: 12px;
@@ -84,8 +85,9 @@ button {
 </style>
 </head>
 <body>
-<h1>Sandwich Shop Voice Agent</h1>
+<h1>Remote Support Voice Agent</h1>
 <p class="subtitle">Powered by Gemini Live API - real-time bidirectional voice</p>
+<div id="session-info"></div>
 
 <div id="controls">
   <button id="connectBtn">Connect</button>
@@ -107,6 +109,15 @@ let playerWorklet = null;
 let playerContext = null;
 let isListening = false;
 
+// ─── URL Parameters ─────────────────────────────────────────
+const urlParams = new URLSearchParams(window.location.search);
+const AGENT_ID = urlParams.get('agent') || 'unknown';
+const GRANT_ID = urlParams.get('grant') || '';
+const BACKEND_URL = window.location.origin.replace(':8001', ':8000');
+
+document.getElementById('session-info').textContent = 
+  `Agent: ${AGENT_ID} | Grant: ${GRANT_ID ? GRANT_ID.substring(0, 8) + '...' : 'none'}`;
+
 // ─── DOM ─────────────────────────────────────────────────────
 const connectBtn = document.getElementById("connectBtn");
 const micBtn = document.getElementById("micBtn");
@@ -114,41 +125,53 @@ const statusEl = document.getElementById("status");
 const transcriptEl = document.getElementById("transcript");
 const debugEl = document.getElementById("debug");
 
-// ─── Sandwich shop tools ──────────────────────────────────────
-const SANDWICH_SYSTEM_PROMPT = `You are a voice assistant for a sandwich shop. Help customers order sandwiches.
+// ─── Remote Support System Prompt ──────────────────────────
+const SUPPORT_SYSTEM_PROMPT = `You are a remote support agent helping a customer with their server issue.
 
-Available items: Turkey Club, Italian BMT, Veggie Delight, Meatball Marinara, BLT, Roast Beef.
+Your role:
+1. Greet the customer and ask them to describe their problem
+2. Listen carefully and ask clarifying questions
+3. Use the run_command tool to execute diagnostic commands on their machine
+4. Explain what you find and what you're doing
+5. Create any necessary scripts or fixes
+6. When done, use revoke_access to end the session
 
-Rules:
-- Keep responses short and conversational (this is voice, not text)
-- No emojis, no markdown
-- Ask clarifying questions when needed
-- Summarize the order before confirming
+Available tools:
+- run_command(command): Execute a command on their machine
+- list_available_commands(): See what commands are allowed
+- revoke_access(): End the session when done
 
-Tools available: add_to_order and confirm_order. Use them when the customer wants to add items or confirm their order.`;
+Be conversational, empathetic, and thorough. Keep responses short for voice.`;
 
+// ─── Tool Definitions ──────────────────────────────────────
 const TOOL_DEFS = [
   {
-    name: "add_to_order",
-    description: "Add an item to the customer's order",
+    name: "run_command",
+    description: "Execute a command on the customer's machine",
     parameters: {
       type: "object",
       properties: {
-        item: { type: "string", description: "The sandwich name" },
-        quantity: { type: "integer", description: "Number of this item" },
+        command: { type: "string", description: "The command to execute" },
       },
-      required: ["item", "quantity"],
+      required: ["command"],
     },
   },
   {
-    name: "confirm_order",
-    description: "Confirm and finalize the customer's order",
+    name: "list_available_commands",
+    description: "List all commands that are allowed to run",
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "revoke_access",
+    description: "End the support session and revoke access",
     parameters: {
       type: "object",
       properties: {
-        order_summary: { type: "string", description: "Summary of the full order" },
+        reason: { type: "string", description: "Reason for ending" },
       },
-      required: ["order_summary"],
     },
   },
 ];
@@ -209,7 +232,7 @@ async function connect() {
             },
           },
         },
-        systemInstruction: { parts: [{ text: SANDWICH_SYSTEM_PROMPT }] },
+        systemInstruction: { parts: [{ text: SUPPORT_SYSTEM_PROMPT }] },
         tools: [{ functionDeclarations: TOOL_DEFS }],
         inputAudioTranscription: {},
         outputAudioTranscription: {},
@@ -328,7 +351,7 @@ function handleMessage(data) {
 }
 
 // ─── Tool call handling ──────────────────────────────────────
-function handleToolCall(toolCall) {
+async function handleToolCall(toolCall) {
   const functionResponses = [];
 
   for (const fc of toolCall.functionCalls || []) {
@@ -337,14 +360,43 @@ function handleToolCall(toolCall) {
     debug(`Executing tool: ${name}(${JSON.stringify(args)})`);
 
     let result;
-    if (name === "add_to_order") {
-      result = `Added ${args.quantity || 1}x ${args.item || "item"} to your order.`;
-      addMsg(`Added ${args.quantity || 1}x ${args.item || "item"}`, "tool");
-    } else if (name === "confirm_order") {
-      result = `Order confirmed: ${args.order_summary || "your items"}. Thank you!`;
-      addMsg(`Order confirmed: ${args.order_summary || ""}`, "tool");
-    } else {
-      result = "Unknown tool.";
+    try {
+      if (name === "run_command") {
+        const resp = await fetch(`${BACKEND_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: `Execute command: ${args.command}`,
+            grant_id: GRANT_ID,
+          }),
+        });
+        const data = await resp.json();
+        result = data.response || "Command executed";
+        addMsg(`Executed: ${args.command}`, "tool");
+      } else if (name === "list_available_commands") {
+        const resp = await fetch(`${BACKEND_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "List available commands",
+            grant_id: GRANT_ID,
+          }),
+        });
+        const data = await resp.json();
+        result = data.response || "Commands listed";
+        addMsg("Listed available commands", "tool");
+      } else if (name === "revoke_access") {
+        const resp = await fetch(`${BACKEND_URL}/sessions/${AGENT_ID}/end`, {
+          method: "POST",
+        });
+        result = "Access revoked, session ended";
+        addMsg("Session ended", "tool");
+      } else {
+        result = "Unknown tool.";
+      }
+    } catch (e) {
+      debug(`Tool error: ${e.message}`);
+      result = `Error: ${e.message}`;
     }
 
     functionResponses.push({

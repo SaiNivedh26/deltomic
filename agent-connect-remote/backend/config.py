@@ -21,6 +21,10 @@ AWS_ACCESS_KEY = get_env("AWS_ACCESS_KEY")
 AWS_SECRET_ACCESS_KEY = get_env("AWS_SECRET_ACCESS_KEY")
 AWS_DEFAULT_REGION = get_env("AWS_DEFAULT_REGION", "us-east-1")
 AGENT_MODEL = get_env("AGENT_MODEL", "google_genai:gemini-3.6-flash")
+PINGRAM_API_KEY = get_env("PINGRAM_API_KEY")
+COMPOSIO_API_KEY = get_env("COMPOSIO_API_KEY")
+BACKEND_URL = get_env("BACKEND_URL", "https://egregious-gale-unmusically.ngrok-free.dev")
+LIVE_SERVER_URL = get_env("LIVE_SERVER_URL", "http://localhost:8001")
 
 ALLOWED_COMMANDS = [
     "ls",

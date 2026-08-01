@@ -5,7 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.access_control import access_control
@@ -17,6 +18,12 @@ from backend.onboarding import (
     verify_managed_instance,
     verify_managed_instance_by_id,
 )
+from backend.pingram_handler import (
+    handle_inbound_email,
+    get_active_session,
+    end_session,
+    _active_sessions,
+)
 
 load_dotenv()
 
@@ -27,6 +34,19 @@ logging.basicConfig(
 )
 
 app = FastAPI(title="Agent Connect Remote - JIT SSM Access")
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.on_event("startup")
+async def wipe_machines_on_startup():
+    from backend.db import get_cursor
+    logger = logging.getLogger(__name__)
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM customer_machines")
+        logger.info("Wiped customer_machines table on startup")
 
 
 class ChatRequest(BaseModel):
@@ -59,6 +79,56 @@ async def startup():
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "agent-connect-remote"}
+
+
+@app.get("/agent.html")
+async def serve_agent_html():
+    agent_path = STATIC_DIR / "agent.html"
+    if not agent_path.exists():
+        raise HTTPException(status_code=404, detail="agent.html not found")
+    return FileResponse(agent_path)
+
+
+@app.get("/audio-processors/{filename}")
+async def serve_audio_processor(filename: str):
+    processor_path = STATIC_DIR / "audio-processors" / filename
+    if not processor_path.exists():
+        raise HTTPException(status_code=404, detail=f"{filename} not found")
+    return FileResponse(processor_path)
+
+
+@app.post("/api/token")
+async def get_gemini_token():
+    import datetime
+    import os
+    from google import genai
+    
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+    
+    client = genai.Client(api_key=api_key, http_options={"api_version": "v1alpha"})
+    
+    try:
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
+        expire_time = now + datetime.timedelta(minutes=30)
+        
+        token = client.auth_tokens.create(
+            config={
+                "uses": 1,
+                "expire_time": expire_time.isoformat(),
+                "new_session_expire_time": (now + datetime.timedelta(minutes=2)).isoformat(),
+                "http_options": {"api_version": "v1alpha"},
+            }
+        )
+        
+        return {
+            "token": token.name,
+            "model": "gemini-3.1-flash-live-preview",
+            "expires_at": expire_time.isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/chat")
@@ -182,3 +252,66 @@ async def get_status(grant_id: str):
     if not status:
         raise HTTPException(status_code=404, detail="Grant not found")
     return status
+
+
+@app.post("/webhook/pingram")
+async def pingram_webhook(payload: dict):
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Pingram webhook received: {payload}")
+    
+    # Try multiple possible field names for event type
+    event_type = payload.get("eventType") or payload.get("type") or payload.get("event") or payload.get("event_type") or ""
+    logger.info(f"Event type: {event_type}")
+    
+    if event_type == "EMAIL_INBOUND":
+        result = await handle_inbound_email(payload)
+        return result
+    return {"status": "ignored", "event_type": event_type, "payload_keys": list(payload.keys())}
+
+
+@app.post("/webhook/test")
+async def test_webhook(payload: dict):
+    """Test endpoint to manually trigger email processing"""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Test webhook: {payload}")
+    
+    # Extract email from various possible fields
+    from_email = (
+        payload.get("from") or 
+        payload.get("sender") or 
+        payload.get("email") or
+        payload.get("to") or  # might be in 'to' field
+        "test@example.com"
+    )
+    
+    # Check if it's nested
+    if isinstance(payload.get("message"), dict):
+        from_email = payload["message"].get("from", from_email)
+    
+    logger.info(f"Test webhook from_email: {from_email}")
+    
+    result = await handle_inbound_email({"from": from_email, "type": "EMAIL_INBOUND"})
+    return result
+
+
+@app.get("/sessions")
+async def list_sessions():
+    return {"sessions": list(_active_sessions.values())}
+
+
+@app.get("/sessions/{agent_id}")
+async def get_session(agent_id: str):
+    session = get_active_session(agent_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+@app.post("/sessions/{agent_id}/end")
+async def end_session_endpoint(agent_id: str):
+    session = end_session(agent_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "ended", "agent_id": agent_id}

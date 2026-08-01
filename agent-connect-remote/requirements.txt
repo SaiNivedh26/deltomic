@@ -6,3 +6,4 @@ langgraph>=0.2.0
 python-dotenv>=1.0.0
 boto3>=1.35.0
 psycopg2-binary>=2.9.0
+pingram-python>=0.1.0
