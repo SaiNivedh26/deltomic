@@ -31,15 +31,18 @@ def get_cursor():
 
 
 def run_migrations():
-    migration_path = Path(__file__).parent.parent / "migrations" / "001_initial_schema.sql"
-    sql = migration_path.read_text()
+    migration_dir = Path(__file__).parent.parent / "migrations"
+    migration_files = sorted(migration_dir.glob("*.sql"))
 
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(sql)
+            for migration_file in migration_files:
+                sql = migration_file.read_text()
+                cur.execute(sql)
+                logger.info(f"Applied migration: {migration_file.name}")
         conn.commit()
-        logger.info("Migrations applied successfully")
+        logger.info("All migrations applied successfully")
     except Exception as e:
         conn.rollback()
         logger.error(f"Migration failed: {e}")

@@ -245,6 +245,7 @@ async def create_meet_link(customer_email: str, agent_id: str) -> str:
                 "event_duration_minutes": 59,
                 "summary": f"Remote Support Session - {agent_id}",
                 "description": f"Support session for {customer_email}. Agent ID: {agent_id}",
+                "attendees": [customer_email],
                 "conference_data": {
                     "conference_solution": "hangoutsMeet"
                 },
@@ -314,7 +315,7 @@ async def create_recall_bot(meeting_url: str, agent_url: str, bot_name: str = "A
         return {"error": str(e)}
 
 
-async def on_instance_connected(customer_id: str, managed_node_id: str, to_email: str):
+async def on_instance_connected(customer_id: str, managed_node_id: str, to_email: str, task_context: str = ""):
     grant_id = access_control.request_access(
         customer_id=customer_id,
         requested_by="pingram-auto",
@@ -335,6 +336,7 @@ async def on_instance_connected(customer_id: str, managed_node_id: str, to_email
     <p><strong>Agent:</strong> {agent_id}</p>
     <p><a href="{meet_url}">Join the support meeting</a></p>
     <p>The AI support agent will join the meeting and help diagnose and resolve your issue. The session is active as long as the meeting is open.</p>
+    <p><strong>Important:</strong> The AI bot will appear in the waiting room. Please admit it so it can assist you.</p>
     """
 
     async with Pingram(api_key=PINGRAM_API_KEY) as client:
@@ -344,6 +346,23 @@ async def on_instance_connected(customer_id: str, managed_node_id: str, to_email
             subject=f"Support Agent {agent_id} Assigned - Join Meeting",
             html=html_body,
         ))
+        
+        organizer_email = os.getenv("ORGANIZER_EMAIL", "sai.the.cool.dev@gmail.com")
+        if organizer_email != to_email:
+            organizer_body = f"""
+            <h2>Support Session Requires Bot Admission</h2>
+            <p><strong>Agent:</strong> {agent_id}</p>
+            <p><strong>Customer:</strong> {to_email}</p>
+            <p><a href="{meet_url}">Open the meeting</a></p>
+            <p>The AI support bot is waiting to be admitted. Please admit "Support Agent {agent_id}" from the waiting room so it can assist the customer.</p>
+            <p><strong>Customer's Issue:</strong> {task_context or "Not specified"}</p>
+            """
+            await client.email.email_send(SendEmailRequest(
+                type="organizer_notification",
+                to=organizer_email,
+                subject=f"Action Required: Admit Bot for {to_email}",
+                html=organizer_body,
+            ))
 
     recall_result = await create_recall_bot(meet_url, agent_page_url, f"Support Agent {agent_id}")
     
@@ -355,6 +374,7 @@ async def on_instance_connected(customer_id: str, managed_node_id: str, to_email
         "email": to_email,
         "meet_url": meet_url,
         "bot_id": recall_result.get("bot_id"),
+        "task_context": task_context,
         "started_at": datetime.utcnow().isoformat(),
     }
 
@@ -364,15 +384,31 @@ async def on_instance_connected(customer_id: str, managed_node_id: str, to_email
 
 async def handle_inbound_email(payload: dict):
     logger = logging.getLogger(__name__)
-    logger.info(f"handle_inbound_email called with payload keys: {list(payload.keys())}")
+    logger.info(f"handle_inbound_email called with FULL payload: {json.dumps(payload, indent=2, default=str)}")
     
     try:
         from_email = payload.get("from") or payload.get("sender") or payload.get("fromAddress") or ""
-        logger.info(f"Extracted from_email: {from_email}")
+        from_name = payload.get("fromName") or ""
+        logger.info(f"Extracted from_email: {from_email}, from_name: {from_name}")
         
         if not from_email:
             logger.error("No sender email in webhook payload")
             return {"error": "no sender email"}
+
+        email_body = (
+            payload.get("bodyText") or
+            payload.get("body") or 
+            payload.get("text") or 
+            payload.get("bodyHtml") or
+            payload.get("html") or 
+            payload.get("message_body") or 
+            payload.get("content") or
+            payload.get("message") or
+            ""
+        )
+        if isinstance(email_body, dict):
+            email_body = email_body.get("text") or email_body.get("html") or email_body.get("body") or str(email_body)
+        logger.info(f"Extracted email body (first 500 chars): {str(email_body)[:500]}")
 
         customer_id = _customer_id_from_email(from_email)
         logger.info(f"Inbound email from {from_email} -> customer_id={customer_id}")
@@ -387,7 +423,7 @@ async def handle_inbound_email(payload: dict):
             logger.error(f"Failed to send onboarding email: {e}", exc_info=True)
             return {"error": f"Failed to send email: {str(e)}"}
 
-        asyncio.create_task(_poll_and_connect(customer_id, from_email))
+        asyncio.create_task(_poll_and_connect(customer_id, from_email, email_body))
         logger.info(f"Started polling task for {customer_id}")
 
         return {
@@ -400,14 +436,14 @@ async def handle_inbound_email(payload: dict):
         return {"error": str(e)}
 
 
-async def _poll_and_connect(customer_id: str, email: str):
+async def _poll_and_connect(customer_id: str, email: str, task_context: str = ""):
     logger = logging.getLogger(__name__)
     logger.info(f"_poll_and_connect STARTED for {customer_id}, email={email}")
     try:
         machine = await poll_for_instance(customer_id)
         if machine:
             logger.info(f"Poll succeeded, calling on_instance_connected for {customer_id}")
-            await on_instance_connected(customer_id, machine["managed_node_id"], email)
+            await on_instance_connected(customer_id, machine["managed_node_id"], email, task_context)
         else:
             logger.error(f"Instance never came online for {customer_id}")
     except Exception as e:

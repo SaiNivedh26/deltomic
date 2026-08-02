@@ -187,7 +187,10 @@ class AccessControlService:
             response = ssm_client.send_command(
                 InstanceIds=[node_id],
                 DocumentName="AWS-RunShellScript",
-                Parameters={"commands": [command]},
+                Parameters={
+                    "commands": [command],
+                    "workingDirectory": ["/home/ubuntu"],
+                },
                 TimeoutSeconds=30,
             )
 

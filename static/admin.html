@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin Dashboard — Agent Connect Remote</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", sans-serif;
+  background: #0a0a1a;
+  color: #e0e0e0;
+  min-height: 100vh;
+}
+header {
+  background: #111;
+  border-bottom: 1px solid #333;
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+header h1 { font-size: 1.2em; color: #4285f4; }
+header .badge { background: #0f9d58; color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 0.8em; }
+nav {
+  display: flex;
+  gap: 0;
+  background: #111;
+  border-bottom: 1px solid #222;
+}
+nav button {
+  background: none;
+  border: none;
+  color: #888;
+  padding: 12px 20px;
+  cursor: pointer;
+  font-size: 0.9em;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+nav button:hover { color: #ccc; }
+nav button.active { color: #4285f4; border-bottom-color: #4285f4; }
+main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+.card {
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.card h3 { color: #4285f4; margin-bottom: 12px; font-size: 1em; }
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.stat-card {
+  background: #111;
+  border: 1px solid #222;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+}
+.stat-card .value { font-size: 2em; font-weight: bold; color: #4285f4; }
+.stat-card .label { font-size: 0.85em; color: #888; margin-top: 4px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+th { text-align: left; padding: 10px; color: #888; border-bottom: 1px solid #333; font-weight: 500; }
+td { padding: 10px; border-bottom: 1px solid #1a1a1a; }
+tr:hover td { background: #1a1a2e; }
+.status-active { color: #0f9d58; }
+.status-ended { color: #888; }
+.status-pending { color: #f4b400; }
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75em;
+  background: #222;
+  color: #ccc;
+  margin: 1px;
+}
+.tag.diagnostic { background: #1a3a1a; color: #4ec9b0; }
+.tag.remediation { background: #3a2a1a; color: #f4b400; }
+.tag.full_autonomous { background: #3a1a1a; color: #db4437; }
+.refresh-btn {
+  background: #4285f4;
+  color: #fff;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.refresh-btn:hover { background: #3367d6; }
+.empty-state { color: #555; text-align: center; padding: 40px; font-style: italic; }
+.agent-card {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.agent-card .agent-header { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; }
+.agent-card .agent-id { font-weight: bold; color: #4285f4; }
+.agent-card .detail { font-size: 0.85em; color: #888; }
+.agent-card .detail strong { color: #ccc; }
+.log-entry {
+  background: #0d0d0d;
+  border-left: 3px solid #333;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  font-family: monospace;
+  font-size: 0.8em;
+}
+.log-entry.success { border-left-color: #0f9d58; }
+.log-entry.failed { border-left-color: #db4437; }
+.log-entry .tool-name { color: #4ec9b0; font-weight: bold; }
+.log-entry .tool-args { color: #888; }
+.log-entry .tool-result { color: #ccc; margin-top: 4px; white-space: pre-wrap; word-break: break-all; }
+.log-entry .meta { color: #555; font-size: 0.85em; margin-top: 2px; }
+.insight-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.insight-bar .bar {
+  height: 20px;
+  background: #4285f4;
+  border-radius: 4px;
+  min-width: 4px;
+}
+.insight-bar .label { font-size: 0.85em; min-width: 150px; }
+.insight-bar .count { font-size: 0.85em; color: #888; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Agent Connect Remote — Admin</h1>
+  <div>
+    <span class="badge" id="activeCount">0 active</span>
+    <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+  </div>
+</header>
+
+<nav>
+  <button class="active" onclick="switchTab('overview')">Overview</button>
+  <button onclick="switchTab('agents')">Active Agents</button>
+  <button onclick="switchTab('tenants')">Tenants</button>
+  <button onclick="switchTab('logs')">Tool Logs</button>
+  <button onclick="switchTab('insights')">Insights</button>
+  <button onclick="switchTab('profiles')">Task Profiles</button>
+</nav>
+
+<main>
+  <div id="tab-overview" class="tab-content active">
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="value" id="statActive">-</div><div class="label">Active Agents</div></div>
+      <div class="stat-card"><div class="value" id="statSessions">-</div><div class="label">Sessions (7d)</div></div>
+      <div class="stat-card"><div class="value" id="statTenants">-</div><div class="label">Unique Tenants (7d)</div></div>
+      <div class="stat-card"><div class="value" id="statToolCalls">-</div><div class="label">Tool Calls (7d)</div></div>
+    </div>
+    <div class="card">
+      <h3>Common Issues This Week</h3>
+      <div id="issueChart"></div>
+    </div>
+    <div class="card">
+      <h3>Recent Active Agents</h3>
+      <div id="recentAgents"></div>
+    </div>
+  </div>
+
+  <div id="tab-agents" class="tab-content">
+    <div class="card">
+      <h3>Currently Deployed Worker Agents</h3>
+      <div id="activeAgentsList"></div>
+    </div>
+  </div>
+
+  <div id="tab-tenants" class="tab-content">
+    <div class="card">
+      <h3>All Tenants</h3>
+      <table>
+        <thead><tr><th>Email</th><th>Company</th><th>Customer ID</th><th>Sessions</th><th>Registered</th></tr></thead>
+        <tbody id="tenantsTable"></tbody>
+      </table>
+    </div>
+    <div class="card" id="tenantDetail" style="display:none">
+      <h3>Tenant Detail</h3>
+      <div id="tenantDetailContent"></div>
+    </div>
+  </div>
+
+  <div id="tab-logs" class="tab-content">
+    <div class="card">
+      <h3>Tool Call Logs</h3>
+      <div style="margin-bottom: 12px;">
+        <select id="logFilter" onchange="loadLogs()" style="background:#222;color:#ccc;border:1px solid #333;padding:6px;border-radius:4px;">
+          <option value="">All Logs</option>
+          <option value="session">By Session</option>
+          <option value="tenant">By Tenant</option>
+        </select>
+        <input id="logFilterId" type="text" placeholder="Session/Tenant ID" style="background:#222;color:#ccc;border:1px solid #333;padding:6px;border-radius:4px;display:none;">
+      </div>
+      <div id="toolLogsList"></div>
+    </div>
+  </div>
+
+  <div id="tab-insights" class="tab-content">
+    <div class="card">
+      <h3>Top Tools Used (7 days)</h3>
+      <div id="topTools"></div>
+    </div>
+    <div class="card">
+      <h3>Top Tenants by Activity (7 days)</h3>
+      <table>
+        <thead><tr><th>Email</th><th>Company</th><th>Sessions</th></tr></thead>
+        <tbody id="topTenantsTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="tab-profiles" class="tab-content">
+    <div class="card">
+      <h3>Task Profiles</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Description</th><th>Default Commands</th><th>Escalation</th></tr></thead>
+        <tbody id="profilesTable"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const API = window.location.origin;
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(el => el.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  event.target.classList.add('active');
+  refreshAll();
+}
+
+async function fetchJSON(url) {
+  const resp = await fetch(url);
+  return resp.json();
+}
+
+async function refreshAll() {
+  await Promise.all([loadOverview(), loadActiveAgents(), loadTenants(), loadLogs(), loadInsights(), loadProfiles()]);
+}
+
+async function loadOverview() {
+  try {
+    const [agents, insights] = await Promise.all([
+      fetchJSON(`${API}/admin/active-agents`),
+      fetchJSON(`${API}/admin/insights`),
+    ]);
+
+    document.getElementById('statActive').textContent = agents.count || 0;
+    document.getElementById('activeCount').textContent = `${agents.count || 0} active`;
+    document.getElementById('statSessions').textContent = insights.totals?.total_sessions || 0;
+    document.getElementById('statTenants').textContent = insights.totals?.unique_tenants || 0;
+    document.getElementById('statToolCalls').textContent = insights.totals?.total_tool_calls || 0;
+
+    const issueChart = document.getElementById('issueChart');
+    const categories = insights.issue_categories || [];
+    if (categories.length === 0) {
+      issueChart.innerHTML = '<div class="empty-state">No issues categorized this week</div>';
+    } else {
+      const maxCount = Math.max(...categories.map(c => c.count));
+      issueChart.innerHTML = categories.map(c => `
+        <div class="insight-bar">
+          <span class="label">${c.issue_category}</span>
+          <div class="bar" style="width: ${(c.count / maxCount) * 300}px"></div>
+          <span class="count">${c.count}</span>
+        </div>
+      `).join('');
+    }
+
+    const recentAgents = document.getElementById('recentAgents');
+    const activeList = agents.active_agents || [];
+    if (activeList.length === 0) {
+      recentAgents.innerHTML = '<div class="empty-state">No active agents</div>';
+    } else {
+      recentAgents.innerHTML = activeList.slice(0, 5).map(a => `
+        <div class="agent-card">
+          <div class="agent-header">
+            <span class="agent-id">${a.agent_id}</span>
+            <span class="status-active">ACTIVE</span>
+          </div>
+          <div class="detail"><strong>Customer:</strong> ${a.email || a.customer_id || 'N/A'}</div>
+          <div class="detail"><strong>Started:</strong> ${a.started_at || 'N/A'}</div>
+          <div class="detail"><strong>Task:</strong> ${a.task_context ? a.task_context.substring(0, 80) : 'N/A'}</div>
+          <div class="detail"><strong>Node:</strong> ${a.managed_node_id || 'N/A'}</div>
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Overview error:', e);
+  }
+}
+
+async function loadActiveAgents() {
+  try {
+    const data = await fetchJSON(`${API}/admin/active-agents`);
+    const list = document.getElementById('activeAgentsList');
+    const agents = data.active_agents || [];
+    if (agents.length === 0) {
+      list.innerHTML = '<div class="empty-state">No active agents deployed</div>';
+      return;
+    }
+    list.innerHTML = agents.map(a => `
+      <div class="agent-card">
+        <div class="agent-header">
+          <span class="agent-id">${a.agent_id}</span>
+          <span class="status-active">ACTIVE</span>
+        </div>
+        <div class="detail"><strong>Email:</strong> ${a.email || 'N/A'}</div>
+        <div class="detail"><strong>Customer ID:</strong> ${a.customer_id || 'N/A'}</div>
+        <div class="detail"><strong>Managed Node:</strong> ${a.managed_node_id || 'N/A'}</div>
+        <div class="detail"><strong>Meet URL:</strong> ${a.meet_url ? `<a href="${a.meet_url}" target="_blank" style="color:#4285f4">Open</a>` : 'N/A'}</div>
+        <div class="detail"><strong>Task:</strong> ${a.task_context || 'Not specified'}</div>
+        <div class="detail"><strong>Started:</strong> ${a.started_at || 'N/A'}</div>
+        <div class="detail"><strong>Bot ID:</strong> ${a.bot_id || 'N/A'}</div>
+        <div class="detail"><strong>Tenant:</strong> ${a.tenant ? `${a.tenant.email} (${a.tenant.company_name || 'No company'})` : 'Not registered'}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Active agents error:', e);
+  }
+}
+
+async function loadTenants() {
+  try {
+    const data = await fetchJSON(`${API}/admin/tenants`);
+    const tbody = document.getElementById('tenantsTable');
+    const tenants = data.tenants || [];
+    if (tenants.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No tenants registered</td></tr>';
+      return;
+    }
+    tbody.innerHTML = tenants.map(t => `
+      <tr onclick="showTenantDetail('${t.id}')" style="cursor:pointer">
+        <td>${t.email}</td>
+        <td>${t.company_name || '-'}</td>
+        <td>${t.customer_id}</td>
+        <td>-</td>
+        <td>${new Date(t.created_at).toLocaleDateString()}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error('Tenants error:', e);
+  }
+}
+
+async function showTenantDetail(tenantId) {
+  try {
+    const data = await fetchJSON(`${API}/admin/tenants/${tenantId}`);
+    const detail = document.getElementById('tenantDetail');
+    const content = document.getElementById('tenantDetailContent');
+    detail.style.display = 'block';
+
+    const t = data.tenant;
+    const sessions = data.sessions || [];
+    content.innerHTML = `
+      <p><strong>Email:</strong> ${t.email}</p>
+      <p><strong>Company:</strong> ${t.company_name || '-'}</p>
+      <p><strong>Customer ID:</strong> ${t.customer_id}</p>
+      <p><strong>Registered:</strong> ${new Date(t.created_at).toLocaleString()}</p>
+      <h4 style="margin-top:16px;color:#4285f4">Session History</h4>
+      ${sessions.length === 0 ? '<div class="empty-state">No sessions</div>' : `
+        <table>
+          <thead><tr><th>Date</th><th>Agent</th><th>Task</th><th>Category</th><th>Status</th><th>Commands</th></tr></thead>
+          <tbody>
+            ${sessions.map(s => `
+              <tr>
+                <td>${new Date(s.started_at).toLocaleString()}</td>
+                <td>${s.agent_id}</td>
+                <td>${(s.task_description || '').substring(0, 60)}</td>
+                <td><span class="tag ${s.issue_category || ''}">${s.issue_category || '-'}</span></td>
+                <td class="status-${s.resolution_status}">${s.resolution_status}</td>
+                <td>${s.tool_calls_count || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+      ${data.context_summary ? `<h4 style="margin-top:16px;color:#4285f4">Context Summary</h4><pre style="font-size:0.8em;color:#888;white-space:pre-wrap">${data.context_summary}</pre>` : ''}
+    `;
+  } catch (e) {
+    console.error('Tenant detail error:', e);
+  }
+}
+
+async function loadLogs() {
+  try {
+    const filter = document.getElementById('logFilter').value;
+    const filterId = document.getElementById('logFilterId').value;
+    const filterIdInput = document.getElementById('logFilterId');
+    filterIdInput.style.display = filter ? 'inline-block' : 'none';
+
+    let url = `${API}/admin/tool-logs?limit=50`;
+    if (filter === 'session' && filterId) url += `&session_id=${filterId}`;
+    if (filter === 'tenant' && filterId) url += `&tenant_id=${filterId}`;
+
+    const data = await fetchJSON(url);
+    const list = document.getElementById('toolLogsList');
+    const logs = data.logs || [];
+    if (logs.length === 0) {
+      list.innerHTML = '<div class="empty-state">No tool call logs</div>';
+      return;
+    }
+    list.innerHTML = logs.map(l => `
+      <div class="log-entry ${l.status}">
+        <span class="tool-name">${l.tool_name}</span>
+        <span class="tool-args">${JSON.stringify(l.tool_args || {})}</span>
+        ${l.tool_result ? `<div class="tool-result">${(l.tool_result || '').substring(0, 200)}</div>` : ''}
+        <div class="meta">${l.model_used || ''} | ${l.duration_ms || 0}ms | ${new Date(l.created_at).toLocaleString()}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Logs error:', e);
+  }
+}
+
+async function loadInsights() {
+  try {
+    const data = await fetchJSON(`${API}/admin/insights`);
+
+    const topTools = document.getElementById('topTools');
+    const tools = data.top_tools || [];
+    if (tools.length === 0) {
+      topTools.innerHTML = '<div class="empty-state">No tool usage data</div>';
+    } else {
+      const maxCount = Math.max(...tools.map(t => t.count));
+      topTools.innerHTML = tools.map(t => `
+        <div class="insight-bar">
+          <span class="label">${t.tool_name}</span>
+          <div class="bar" style="width: ${(t.count / maxCount) * 300}px"></div>
+          <span class="count">${t.count}</span>
+        </div>
+      `).join('');
+    }
+
+    const tbody = document.getElementById('topTenantsTable');
+    const tenants = data.top_tenants || [];
+    if (tenants.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No tenant activity</td></tr>';
+    } else {
+      tbody.innerHTML = tenants.map(t => `
+        <tr>
+          <td>${t.email}</td>
+          <td>${t.company_name || '-'}</td>
+          <td>${t.session_count}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Insights error:', e);
+  }
+}
+
+async function loadProfiles() {
+  try {
+    const data = await fetchJSON(`${API}/admin/task-profiles`);
+    const tbody = document.getElementById('profilesTable');
+    const profiles = data.profiles || [];
+    if (profiles.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No task profiles</td></tr>';
+      return;
+    }
+    tbody.innerHTML = profiles.map(p => `
+      <tr>
+        <td><span class="tag ${p.name}">${p.name}</span></td>
+        <td>${p.description || '-'}</td>
+        <td>${(p.default_commands || []).length} commands</td>
+        <td>${(p.escalation_commands || []).length} patterns</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    console.error('Profiles error:', e);
+  }
+}
+
+refreshAll();
+setInterval(refreshAll, 15000);
+</script>
+</body>
+</html>

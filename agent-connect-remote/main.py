@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.access_control import access_control
-from backend.agent import chat
 from backend.db import run_migrations
 from backend.onboarding import (
     create_hybrid_activation,
@@ -24,6 +25,23 @@ from backend.pingram_handler import (
     end_session,
     _active_sessions,
 )
+from backend.tenant_service import (
+    get_or_create_tenant,
+    get_tenant_by_email,
+    get_tenant_by_id,
+    get_tenant_by_customer_id,
+    list_tenants,
+    get_session_history,
+    get_previous_context,
+    get_tool_call_logs,
+    get_weekly_insights,
+)
+from backend.tool_config import (
+    get_task_profile,
+    list_task_profiles,
+    create_task_profile,
+)
+from backend.worker_agent import worker_chat
 
 load_dotenv()
 
@@ -53,6 +71,9 @@ class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
     grant_id: str | None = None
+    email: str = ""
+    task_context: str = ""
+    agent_id: str = ""
 
 
 class AccessRequest(BaseModel):
@@ -69,6 +90,22 @@ class RevokeRequest(BaseModel):
     grant_id: str
     revoked_by: str
     reason: str = ""
+
+
+class RegisterMachineRequest(BaseModel):
+    customer_id: str
+    managed_node_id: str
+    machine_name: str | None = None
+
+
+class TaskProfileRequest(BaseModel):
+    name: str
+    description: str = ""
+    allowed_tools: list[str] | None = None
+    restricted_tools: list[str] | None = None
+    requires_escalation: list[str] | None = None
+    default_commands: list[str] | None = None
+    escalation_commands: list[str] | None = None
 
 
 @app.on_event("startup")
@@ -102,17 +139,17 @@ async def get_gemini_token():
     import datetime
     import os
     from google import genai
-    
+
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
-    
+
     client = genai.Client(api_key=api_key, http_options={"api_version": "v1alpha"})
-    
+
     try:
         now = datetime.datetime.now(tz=datetime.timezone.utc)
         expire_time = now + datetime.timedelta(minutes=30)
-        
+
         token = client.auth_tokens.create(
             config={
                 "uses": 1,
@@ -121,7 +158,7 @@ async def get_gemini_token():
                 "http_options": {"api_version": "v1alpha"},
             }
         )
-        
+
         return {
             "token": token.name,
             "model": "gemini-3.1-flash-live-preview",
@@ -131,19 +168,167 @@ async def get_gemini_token():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ExecuteCommandRequest(BaseModel):
+    command: str
+    grant_id: str
+    agent_id: str
+
+
+class TaskRequest(BaseModel):
+    task_description: str
+    grant_id: str
+    agent_id: str
+
+
+@app.post("/task")
+async def execute_task(req: TaskRequest):
+    """Execute a task using Groq agent for planning and execution."""
+    import time
+    from backend.worker_agent import execute_task_with_groq
+    
+    try:
+        result = await execute_task_with_groq(
+            task_description=req.task_description,
+            grant_id=req.grant_id,
+            agent_id=req.agent_id,
+        )
+        return result
+    except Exception as e:
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"Task execution error: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Task failed: {str(e)}")
+
+
+@app.post("/task/stream")
+async def execute_task_stream(req: TaskRequest):
+    """Start a task and return task_id for SSE streaming."""
+    from backend.worker_agent import execute_task_streaming
+    
+    try:
+        task_id, _ = await execute_task_streaming(
+            task_description=req.task_description,
+            grant_id=req.grant_id,
+            agent_id=req.agent_id,
+        )
+        return {"task_id": task_id, "status": "started"}
+    except Exception as e:
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"Task stream error: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Task failed: {str(e)}")
+
+
+@app.get("/task/{task_id}/events")
+async def task_events(task_id: str):
+    """SSE endpoint for streaming task events."""
+    from backend.worker_agent import _task_queues
+    
+    if task_id not in _task_queues:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    async def generate():
+        queue = _task_queues[task_id]
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=300)
+                yield f"data: {json.dumps(event)}\n\n"
+                if event.get("type") in ("task_complete", "task_error"):
+                    break
+            except asyncio.TimeoutError:
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+        
+        _task_queues.pop(task_id, None)
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+class ApprovalRequest(BaseModel):
+    task_id: str
+    approved: bool
+
+
+@app.post("/task/approve")
+async def approve_task_command(req: ApprovalRequest):
+    """Approve or deny a destructive command."""
+    from backend.worker_agent import approve_command
+    approve_command(req.task_id, req.approved)
+    return {"status": "approved" if req.approved else "denied"}
+
+
+@app.post("/execute")
+async def execute_command(req: ExecuteCommandRequest):
+    import time
+    from backend.access_control import access_control
+    from backend.tool_config import is_destructive
+    from backend.tenant_service import log_tool_call, get_tenant_by_email
+    from backend.config import GROQ_MODEL
+    
+    try:
+        if is_destructive(req.command):
+            return {
+                "response": f"ESCALATION_REQUIRED: Command '{req.command}' is destructive and requires explicit customer approval.",
+                "status": "escalation_required"
+            }
+        
+        start_time = time.time()
+        result = await access_control.execute_command(
+            grant_id=req.grant_id,
+            command=req.command,
+            executed_by=req.agent_id,
+        )
+        duration_ms = int((time.time() - start_time) * 1000)
+        
+        if result["status"] == "Success":
+            output = result["stdout"].strip()
+            log_tool_call(
+                tool_name="run_command",
+                tool_args={"command": req.command},
+                tool_result=output[:2000] if output else "(no output)",
+                status="success",
+                duration_ms=duration_ms,
+                model_used="direct",
+                agent_id=req.agent_id,
+                grant_id=req.grant_id,
+            )
+            return {"response": output if output else "(no output)", "status": "success"}
+        else:
+            error_msg = result["stderr"] or result["status"]
+            log_tool_call(
+                tool_name="run_command",
+                tool_args={"command": req.command},
+                tool_result=error_msg,
+                status="failed",
+                duration_ms=duration_ms,
+                model_used="direct",
+                agent_id=req.agent_id,
+                grant_id=req.grant_id,
+            )
+            return {"response": f"Command failed: {error_msg}", "status": "failed"}
+    except PermissionError as e:
+        return {"response": f"Permission denied: {e}", "status": "permission_denied"}
+    except Exception as e:
+        return {"response": f"Error: {e}", "status": "error"}
+
+
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
     try:
-        response = await chat(req.message, req.thread_id, req.grant_id)
+        agent_id = req.agent_id or "agent-default"
+        response = await worker_chat(
+            message=req.message,
+            grant_id=req.grant_id or "",
+            agent_id=agent_id,
+            email=req.email,
+            task_context=req.task_context,
+            thread_id=req.thread_id,
+        )
         return {"response": response}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class RegisterMachineRequest(BaseModel):
-    customer_id: str
-    managed_node_id: str
-    machine_name: str | None = None
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"Chat error: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Agent error: {str(e)}")
 
 
 @app.post("/onboarding/create-activation")
@@ -162,7 +347,7 @@ async def create_activation(customer_id: str):
 @app.post("/onboarding/register")
 async def register_machine(req: RegisterMachineRequest):
     from backend.db import get_cursor
-    
+
     with get_cursor() as cur:
         cur.execute(
             """
@@ -176,15 +361,14 @@ async def register_machine(req: RegisterMachineRequest):
             """,
             (req.customer_id, req.managed_node_id, req.machine_name),
         )
-    
+
     return {"status": "registered", "customer_id": req.customer_id, "managed_node_id": req.managed_node_id}
 
 
 @app.post("/onboarding/verify/{customer_id}")
 async def verify_instance(customer_id: str):
     from backend.db import get_cursor
-    
-    # Check DB first
+
     with get_cursor() as cur:
         cur.execute(
             """
@@ -196,9 +380,8 @@ async def verify_instance(customer_id: str):
             (customer_id,),
         )
         db_record = cur.fetchone()
-    
+
     if db_record:
-        # Verify with SSM that it's still online
         instance = verify_managed_instance_by_id(db_record["managed_node_id"])
         if instance:
             return {
@@ -212,8 +395,7 @@ async def verify_instance(customer_id: str):
                 "status": "offline",
                 "message": "Machine registered in DB but not found in SSM",
             }
-    
-    # Fallback: check SSM directly
+
     instance = verify_managed_instance(customer_id)
     if not instance:
         raise HTTPException(status_code=404, detail="No managed instance found")
@@ -256,42 +438,117 @@ async def get_status(grant_id: str):
 
 @app.post("/webhook/pingram")
 async def pingram_webhook(payload: dict):
-    import logging
     logger = logging.getLogger(__name__)
     logger.info(f"Pingram webhook received: {payload}")
-    
-    # Try multiple possible field names for event type
+
     event_type = payload.get("eventType") or payload.get("type") or payload.get("event") or payload.get("event_type") or ""
     logger.info(f"Event type: {event_type}")
-    
+
     if event_type == "EMAIL_INBOUND":
         result = await handle_inbound_email(payload)
         return result
     return {"status": "ignored", "event_type": event_type, "payload_keys": list(payload.keys())}
 
 
-@app.post("/webhook/test")
-async def test_webhook(payload: dict):
-    """Test endpoint to manually trigger email processing"""
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Test webhook: {payload}")
+@app.post("/webhook/test-pingram")
+async def test_pingram_webhook(request: Request):
+    import json
+    from pathlib import Path
     
-    # Extract email from various possible fields
+    logger = logging.getLogger(__name__)
+    
+    raw_body = await request.body()
+    raw_text = raw_body.decode("utf-8")
+    
+    logger.info(f"=== TEST PINGRAM WEBHOOK ===")
+    logger.info(f"Headers: {dict(request.headers)}")
+    logger.info(f"Raw body length: {len(raw_text)}")
+    logger.info(f"Raw body: {raw_text[:2000]}")
+    
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        payload = {"raw": raw_text}
+    
+    dump_file = Path(__file__).parent.parent / "webhook-dump.json"
+    with open(dump_file, "w") as f:
+        json.dump({
+            "headers": dict(request.headers),
+            "payload": payload,
+            "raw": raw_text,
+        }, f, indent=2, default=str)
+    
+    logger.info(f"Full payload dumped to: {dump_file}")
+    
     from_email = (
         payload.get("from") or 
         payload.get("sender") or 
-        payload.get("email") or
-        payload.get("to") or  # might be in 'to' field
-        "test@example.com"
+        payload.get("fromAddress") or
+        payload.get("return_path") or
+        ""
     )
     
-    # Check if it's nested
     if isinstance(payload.get("message"), dict):
         from_email = payload["message"].get("from", from_email)
     
-    logger.info(f"Test webhook from_email: {from_email}")
+    email_body = (
+        payload.get("body") or 
+        payload.get("text") or 
+        payload.get("html") or 
+        payload.get("message_body") or 
+        payload.get("content") or
+        payload.get("message") or
+        payload.get("description") or
+        ""
+    )
     
+    if isinstance(email_body, dict):
+        email_body = (
+            email_body.get("text") or 
+            email_body.get("html") or 
+            email_body.get("body") or 
+            str(email_body)
+        )
+    
+    subject = payload.get("subject") or payload.get("title") or ""
+    if isinstance(payload.get("message"), dict):
+        subject = payload["message"].get("subject", subject)
+    
+    result = {
+        "status": "received",
+        "parsed": {
+            "from_email": from_email,
+            "subject": subject,
+            "body_preview": str(email_body)[:500],
+            "body_length": len(str(email_body)),
+        },
+        "raw_keys": list(payload.keys()) if isinstance(payload, dict) else "not-a-dict",
+        "dump_file": str(dump_file),
+    }
+    
+    logger.info(f"Parsed result: {json.dumps(result, indent=2)}")
+    
+    return result
+
+
+@app.post("/webhook/test")
+async def test_webhook(payload: dict):
+    logger = logging.getLogger(__name__)
+    logger.info(f"Test webhook: {payload}")
+
+    from_email = (
+        payload.get("from") or
+        payload.get("sender") or
+        payload.get("email") or
+        payload.get("to") or
+        "test@example.com"
+    )
+
+    if isinstance(payload.get("message"), dict):
+        from_email = payload["message"].get("from", from_email)
+
+    logger.info(f"Test webhook from_email: {from_email}")
+
     result = await handle_inbound_email({"from": from_email, "type": "EMAIL_INBOUND"})
     return result
 
@@ -315,3 +572,118 @@ async def end_session_endpoint(agent_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "ended", "agent_id": agent_id}
+
+
+@app.get("/admin/tenants")
+async def admin_list_tenants(limit: int = 100, offset: int = 0):
+    tenants = list_tenants(limit=limit, offset=offset)
+    return {"tenants": tenants, "total": len(tenants)}
+
+
+@app.get("/admin/tenants/{tenant_id}")
+async def admin_get_tenant(tenant_id: str):
+    tenant = get_tenant_by_id(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    sessions = get_session_history(tenant_id, limit=20)
+    context = get_previous_context(tenant_id)
+
+    return {
+        "tenant": tenant,
+        "sessions": sessions,
+        "context_summary": context,
+    }
+
+
+@app.get("/admin/tenants/email/{email}")
+async def admin_get_tenant_by_email(email: str):
+    tenant = get_tenant_by_email(email)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    sessions = get_session_history(tenant["id"], limit=20)
+    return {
+        "tenant": tenant,
+        "sessions": sessions,
+    }
+
+
+@app.get("/admin/sessions/{tenant_id}/history")
+async def admin_session_history(tenant_id: str, limit: int = 20):
+    sessions = get_session_history(tenant_id, limit=limit)
+    return {"sessions": sessions}
+
+
+@app.get("/admin/tool-logs")
+async def admin_tool_logs(
+    session_id: str | None = None,
+    tenant_id: str | None = None,
+    limit: int = 100,
+):
+    logs = get_tool_call_logs(session_id=session_id, tenant_id=tenant_id, limit=limit)
+    return {"logs": logs}
+
+
+@app.get("/admin/insights")
+async def admin_insights():
+    insights = get_weekly_insights()
+    return insights
+
+
+@app.get("/admin/active-agents")
+async def admin_active_agents():
+    agents = []
+    for agent_id, session in _active_sessions.items():
+        tenant = None
+        if session.get("email"):
+            tenant = get_tenant_by_email(session["email"])
+
+        agents.append({
+            "agent_id": agent_id,
+            "customer_id": session.get("customer_id"),
+            "email": session.get("email"),
+            "tenant": tenant,
+            "managed_node_id": session.get("managed_node_id"),
+            "meet_url": session.get("meet_url"),
+            "task_context": session.get("task_context"),
+            "started_at": session.get("started_at"),
+            "bot_id": session.get("bot_id"),
+            "status": "active",
+        })
+    return {"active_agents": agents, "count": len(agents)}
+
+
+@app.get("/admin/task-profiles")
+async def admin_list_task_profiles():
+    profiles = list_task_profiles()
+    return {"profiles": profiles}
+
+
+@app.post("/admin/task-profiles")
+async def admin_create_task_profile(req: TaskProfileRequest):
+    profile = create_task_profile(
+        name=req.name,
+        description=req.description,
+        allowed_tools=req.allowed_tools,
+        restricted_tools=req.restricted_tools,
+        requires_escalation=req.requires_escalation,
+        default_commands=req.default_commands,
+        escalation_commands=req.escalation_commands,
+    )
+    return {"profile": profile}
+
+
+@app.get("/admin/tenant-context/{email}")
+async def get_tenant_context(email: str):
+    tenant = get_or_create_tenant(email)
+    context = get_previous_context(tenant["id"])
+    return {"tenant": tenant, "context": context}
+
+
+@app.get("/admin/dashboard.html")
+async def serve_admin_dashboard():
+    dashboard_path = STATIC_DIR / "admin.html"
+    if not dashboard_path.exists():
+        raise HTTPException(status_code=404, detail="admin.html not found")
+    return FileResponse(dashboard_path)

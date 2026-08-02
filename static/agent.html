@@ -3,83 +3,298 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AI Voice Agent — Recall Bot</title>
+<title>Deltomic — AI Support Agent</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: -apple-system, "Segoe UI", sans-serif;
-  background: #0a0a1a;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #0a0a0f;
   color: #e0e0e0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 10px;
   width: 1280px;
   height: 720px;
   overflow: hidden;
 }
-#status {
-  font-size: 1.2em;
-  color: #4285f4;
-  margin-bottom: 12px;
-  text-align: center;
+
+#app {
+  display: flex;
+  width: 100%;
+  height: 100%;
 }
-#transcript {
-  width: 90%;
-  max-width: 800px;
-  height: 200px;
+
+#left-panel {
+  width: 50%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #2a2a3a;
+  background: #0f0f1a;
+}
+
+#right-panel {
+  width: 50%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0f;
+}
+
+.panel-header {
+  padding: 12px 16px;
+  background: #151520;
+  border-bottom: 1px solid #2a2a3a;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #888;
+  font-weight: 600;
+}
+
+#status-bar {
+  padding: 16px;
+  text-align: center;
+  border-bottom: 1px solid #2a2a3a;
+}
+
+#logo {
+  width: 50px;
+  height: 50px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+  font-size: 1.5em;
+  font-weight: bold;
+  color: white;
+}
+
+#status-text {
+  font-size: 0.9em;
+  color: #667eea;
+  margin-bottom: 8px;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.7em;
+  font-weight: 500;
+}
+
+.chip.connected { background: #10b981; color: white; }
+.chip.disconnected { background: #374151; color: #9ca3af; }
+.chip.connecting { background: #f59e0b; color: white; }
+
+#context-banner {
+  padding: 8px 16px;
+  background: #1a1a2e;
+  border-bottom: 1px solid #2a2a3a;
+  font-size: 0.75em;
+  color: #6b7280;
+  min-height: 32px;
+}
+
+#context-banner.has-history {
+  color: #9ca3af;
+  border-left: 3px solid #667eea;
+}
+
+#conversation {
+  flex: 1;
   overflow-y: auto;
-  background: #111;
-  border: 1px solid #333;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.msg {
+  line-height: 1.6;
+  font-size: 0.95em;
+  padding: 12px 16px;
   border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 12px;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg.user {
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+  color: #fbbf24;
+}
+
+.msg.assistant {
+  background: rgba(102, 126, 234, 0.1);
+  border-left: 3px solid #667eea;
+  color: #a5b4fc;
+}
+
+.msg.system {
+  background: rgba(107, 114, 128, 0.1);
+  color: #9ca3af;
+  font-style: italic;
+  font-size: 0.85em;
+  padding: 8px 12px;
+}
+
+.msg.tool {
+  background: rgba(16, 185, 129, 0.1);
+  border-left: 3px solid #10b981;
+  color: #6ee7b7;
   font-size: 0.9em;
 }
-.msg { margin-bottom: 4px; line-height: 1.3; }
-.msg.user { color: #f4b400; }
-.msg.assistant { color: #4285f4; }
-.msg.system { color: #666; font-style: italic; }
-.msg.tool { color: #0f9d58; font-size: 0.85em; }
-#logo {
-  width: 120px; height: 120px;
-  background: linear-gradient(135deg, #4285f4, #0f9d58);
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+
+.approval-card {
+  background: rgba(245, 158, 11, 0.15);
+  border: 2px solid #f59e0b;
+  border-radius: 12px;
+  padding: 20px;
+  margin: 12px 0;
+  animation: fadeIn 0.3s ease;
+}
+
+.approval-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: #fbbf24;
   margin-bottom: 12px;
-  font-size: 3em;
 }
-.pulse { animation: pulse 1.5s infinite; }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-.chip {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 10px;
+
+.approval-action {
+  font-size: 1em;
+  color: #e0e0e0;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.approval-consequence {
+  font-size: 0.9em;
+  color: #9ca3af;
+  margin-bottom: 8px;
+  padding-left: 12px;
+  border-left: 2px solid #6b7280;
+}
+
+.approval-recommendation {
+  font-size: 0.9em;
+  color: #10b981;
+  margin-top: 12px;
+  font-weight: 500;
+}
+
+#commands {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.85em;
+}
+
+.cmd-block {
+  margin-bottom: 16px;
+  background: #151520;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cmd-header {
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border-bottom: 1px solid #2a2a3a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cmd-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.cmd-status-dot.running { background: #f59e0b; animation: pulse 1.5s infinite; }
+.cmd-status-dot.success { background: #10b981; }
+.cmd-status-dot.failed { background: #ef4444; }
+.cmd-status-dot.escalation { background: #f59e0b; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.cmd-line {
+  color: #e0e0e0;
+  font-weight: 600;
+  flex: 1;
+}
+
+.cmd-line::before {
+  content: "$ ";
+  color: #6b7280;
+}
+
+.cmd-output {
+  padding: 12px;
+  color: #d1d5db;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+.cmd-footer {
+  padding: 6px 12px;
   font-size: 0.75em;
-  margin: 2px;
+  color: #6b7280;
+  border-top: 1px solid #2a2a3a;
 }
-.chip.connected { background: #0f9d58; color: #fff; }
-.chip.disconnected { background: #555; color: #fff; }
-.chip.connecting { background: #f4b400; color: #000; }
+
+.cmd-footer.success { color: #10b981; }
+.cmd-footer.failed { color: #ef4444; }
+.cmd-footer.running { color: #f59e0b; }
+
+.pulse { animation: pulse 1.5s infinite; }
 </style>
 </head>
 <body>
-<div id="logo">AI</div>
-<div id="status">Initializing...</div>
-<div style="margin-bottom: 8px;">
-  <span class="chip disconnected" id="geminiChip">Gemini: Disconnected</span>
-  <span class="chip disconnected" id="micChip">Mic: Off</span>
-  <span class="chip disconnected" id="meetingChip">Meeting Audio: Off</span>
+
+<div id="app">
+  <div id="left-panel">
+    <div id="status-bar">
+      <div id="logo">D</div>
+      <div id="status-text">Initializing...</div>
+      <div class="chips">
+        <span class="chip disconnected" id="geminiChip">Gemini: Off</span>
+        <span class="chip disconnected" id="micChip">Mic: Off</span>
+        <span class="chip disconnected" id="meetingChip">Audio: Off</span>
+      </div>
+    </div>
+    <div id="context-banner">No previous sessions</div>
+    <div class="panel-header">Conversation</div>
+    <div id="conversation"></div>
+  </div>
+
+  <div id="right-panel">
+    <div class="panel-header">Command Execution</div>
+    <div id="commands"></div>
+  </div>
 </div>
-<div id="transcript"></div>
 
 <script>
-// ─── State ──────────────────────────────────────────────────
 let ws = null;
 let audioContext = null;
-let meetingAudioContext = null;
 let mediaStream = null;
 let workletNode = null;
 let playerWorklet = null;
@@ -92,45 +307,53 @@ const AGENT_ID = urlParams.get('agent') || 'unknown';
 const GRANT_ID = urlParams.get('grant') || '';
 const BACKEND_URL = window.location.origin;
 
-const SYSTEM_PROMPT = `You are a remote support agent helping a customer with their server issue. You are currently in a Google Meet call and your audio is being played to meeting participants.
+let SYSTEM_PROMPT = `You are Deltomic, an AI support agent helping a customer with their server issue. You are currently in a Google Meet call and your audio is being played to meeting participants.
 
 Your role:
-1. Greet the customer and ask them to describe their problem
-2. Listen carefully and ask clarifying questions
-3. Use the run_command tool to execute diagnostic commands on their machine
-4. Explain what you find and what you're doing
-5. Create any necessary scripts or fixes
-6. When done, use revoke_access to end the session
+1. Greet the customer briefly and professionally
+2. Listen to their issue carefully
+3. When they ask you to do something, use the delegate_task tool to execute it
+4. After receiving results, explain what was done in a clear, conversational way
+5. For destructive or risky commands, explain the consequences in plain language before proceeding
+6. When the task is complete, use revoke_access to end the session
 
 Available tools:
-- run_command(command): Execute a command on their machine
-- list_available_commands(): See what commands are allowed
-- revoke_access(): End the session when done
+- delegate_task(task_description): Send a task to the execution agent. The agent will plan and execute commands, then return results.
+- revoke_access(reason): End the support session
+
+IMPORTANT - Approval Flow for Risky Actions:
+When the execution agent needs to run a command that could modify data, delete files, restart services, or have any significant impact:
+1. Explain WHAT is happening in plain language (no technical jargon)
+2. Explain WHY it's needed (the diagnosis)
+3. Explain WHAT WILL CHANGE (the real-world effect)
+4. Explain what happens if they say NO
+5. Offer a recommendation (e.g., "I'd recommend doing this now, it's usually safe")
+6. Ask for a simple yes/no decision
+
+Example:
+Instead of: "Restart pod payment-worker-3?"
+Say: "Your payment processing service has been stuck since 2:15 PM. I can restart it, which will briefly pause new payments for about 10 seconds, then it should recover. I'd recommend doing this now since it's usually safe. Do you want me to proceed, or would you prefer to wait?"
+
+If the customer hesitates or seems confused, default to the safer option and offer to escalate to a technical contact.
 
 Rules:
-- Keep responses short and conversational — this is a LIVE voice call, not text chat
+- Keep responses short and conversational — this is a LIVE voice call
 - No emojis, no markdown, no bullet points
-- Be empathetic and thorough
-- Show command output and explain what you're doing at each step`;
+- Be professional and empathetic
+- Always explain what you're doing and why in plain language
+- Never show raw command syntax unless the customer is technical and asks for it
+- The working directory is /home/ubuntu`;
 
 const TOOL_DEFS = [
   {
-    name: "run_command",
-    description: "Execute a command on the customer's machine",
+    name: "delegate_task",
+    description: "Send a task to the execution agent. The agent will plan, execute commands, and return results. Use this when the customer asks you to do something.",
     parameters: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The command to execute" },
+        task_description: { type: "string", description: "Clear description of what needs to be done" },
       },
-      required: ["command"],
-    },
-  },
-  {
-    name: "list_available_commands",
-    description: "List all commands that are allowed to run",
-    parameters: {
-      type: "object",
-      properties: {},
+      required: ["task_description"],
     },
   },
   {
@@ -145,69 +368,120 @@ const TOOL_DEFS = [
   },
 ];
 
-const statusEl = document.getElementById("status");
-const transcriptEl = document.getElementById("transcript");
+const statusEl = document.getElementById("status-text");
+const conversationEl = document.getElementById("conversation");
+const commandsEl = document.getElementById("commands");
 const geminiChip = document.getElementById("geminiChip");
 const micChip = document.getElementById("micChip");
 const meetingChip = document.getElementById("meetingChip");
+const contextBanner = document.getElementById("context-banner");
 
-// ─── Helpers ─────────────────────────────────────────────────
 function setStatus(msg) { statusEl.textContent = msg; }
-function addMsg(text, cls) {
+
+function addConversation(text, cls) {
   const div = document.createElement("div");
   div.className = `msg ${cls}`;
   div.textContent = text;
-  transcriptEl.appendChild(div);
-  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  conversationEl.appendChild(div);
+  conversationEl.scrollTop = conversationEl.scrollHeight;
 }
+
+function updateLastAssistantMessage(text) {
+  const msgs = conversationEl.querySelectorAll('.msg.assistant');
+  if (msgs.length > 0) {
+    msgs[msgs.length - 1].textContent = text;
+  } else {
+    addConversation(text, 'assistant');
+  }
+  conversationEl.scrollTop = conversationEl.scrollHeight;
+}
+
+function addCommandBlock(command, status) {
+  const block = document.createElement("div");
+  block.className = "cmd-block";
+  block.id = `cmd-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  const header = document.createElement("div");
+  header.className = "cmd-header";
+  
+  const dot = document.createElement("div");
+  dot.className = `cmd-status-dot ${status}`;
+  header.appendChild(dot);
+
+  const cmdLine = document.createElement("div");
+  cmdLine.className = "cmd-line";
+  cmdLine.textContent = command;
+  header.appendChild(cmdLine);
+
+  block.appendChild(header);
+
+  const footer = document.createElement("div");
+  footer.className = `cmd-footer ${status}`;
+  footer.textContent = status === 'running' ? 'Executing...' : status;
+  block.appendChild(footer);
+
+  commandsEl.appendChild(block);
+  commandsEl.scrollTop = commandsEl.scrollHeight;
+  return block.id;
+}
+
+function updateCommandBlock(blockId, output, status) {
+  const block = document.getElementById(blockId);
+  if (!block) return;
+
+  const existingOutput = block.querySelector('.cmd-output');
+  if (existingOutput) existingOutput.remove();
+
+  if (output) {
+    const outputEl = document.createElement("div");
+    outputEl.className = "cmd-output";
+    outputEl.textContent = output;
+    block.insertBefore(outputEl, block.lastElementChild);
+  }
+
+  const dot = block.querySelector('.cmd-status-dot');
+  if (dot) dot.className = `cmd-status-dot ${status}`;
+
+  const footer = block.querySelector('.cmd-footer');
+  if (footer) {
+    footer.className = `cmd-footer ${status}`;
+    footer.textContent = status === 'success' ? 'Completed' : status === 'failed' ? 'Failed' : status;
+  }
+
+  commandsEl.scrollTop = commandsEl.scrollHeight;
+}
+
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
   return btoa(binary);
 }
+
 function setChip(el, state, label) {
   el.className = `chip ${state}`;
   el.textContent = label;
 }
 
-// ─── Get meeting audio via Recall bot's auto-granted getUserMedia ─
-// Recall automatically grants mic permissions for the bot's webpage.
-// This gives us the meeting audio stream.
 async function getMeetingAudio() {
   try {
     setStatus("Getting meeting audio...");
-    setChip(meetingChip, "connecting", "Meeting Audio: Connecting...");
-
+    setChip(meetingChip, "connecting", "Audio: Connecting...");
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false,
     });
-
-    // Read tracks to verify
-    const tracks = mediaStream.getAudioTracks();
-    console.log("Meeting audio tracks:", tracks.length);
-    if (tracks.length > 0) {
-      console.log("Track settings:", tracks[0].getSettings());
-    }
-
-    setChip(meetingChip, "connected", "Meeting Audio: On");
-    setStatus("Meeting audio connected");
-    addMsg("[Meeting audio connected]", "system");
+    setChip(meetingChip, "connected", "Audio: On");
+    addConversation("[Meeting audio connected]", "system");
     return true;
   } catch (e) {
     console.error("getUserMedia error:", e);
-    setChip(meetingChip, "disconnected", "Meeting Audio: Failed");
-    addMsg(`Meeting audio error: ${e.message}`, "system");
+    setChip(meetingChip, "disconnected", "Audio: Failed");
+    addConversation(`Audio error: ${e.message}`, "system");
     return false;
   }
 }
 
-// ─── Audio playback (24kHz PCM from Gemini) ───────────────────
 async function initPlayer() {
   if (playerContext) return;
   playerContext = new AudioContext({ sampleRate: 24000 });
@@ -219,46 +493,36 @@ async function initPlayer() {
 async function playAudio(base64Audio) {
   if (!playerWorklet) await initPlayer();
   if (playerContext.state === "suspended") await playerContext.resume();
-
   const binary = atob(base64Audio);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-
   const int16 = new Int16Array(bytes.buffer);
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
-
   playerWorklet.port.postMessage(float32);
   isReceiving = true;
 }
 
-// ─── Send meeting audio to Gemini ────────────────────────────
 async function startSendingToGemini() {
   if (!mediaStream) return;
-
-  // Create audio context at 16kHz for Gemini
   audioContext = new AudioContext({ sampleRate: 16000 });
   await audioContext.audioWorklet.addModule("audio-processors/capture.worklet.js");
   workletNode = new AudioWorkletNode(audioContext, "audio-capture-processor");
-
   workletNode.port.onmessage = (event) => {
     if (event.data.type === "audio") {
       const pcm16 = convertToPCM16(event.data.data);
       const base64 = arrayBufferToBase64(pcm16);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
-          realtimeInput: {
-            audio: { mimeType: "audio/pcm", data: base64 },
-          },
+          realtimeInput: { audio: { mimeType: "audio/pcm", data: base64 } },
         }));
       }
     }
   };
-
   const source = audioContext.createMediaStreamSource(mediaStream);
   source.connect(workletNode);
-  setChip(micChip, "connected", "Mic: Streaming to Gemini");
-  addMsg("[Streaming meeting audio to Gemini]", "system");
+  setChip(micChip, "connected", "Mic: Streaming");
+  addConversation("[Streaming audio to Gemini]", "system");
 }
 
 function convertToPCM16(float32Array) {
@@ -270,236 +534,267 @@ function convertToPCM16(float32Array) {
   return int16.buffer;
 }
 
-// ─── Connect to Gemini Live ─────────────────────────────────
 async function connectGemini() {
   setStatus("Fetching Gemini token...");
-  setChip(geminiChip, "connecting", "Gemini: Getting token...");
-
-  // Determine the server URL for token requests.
-  // When loaded by the Recall bot, window.location.origin is the public URL (e.g. ngrok).
+  setChip(geminiChip, "connecting", "Gemini: Token...");
   const tokenUrl = window.location.origin + "/api/token";
-
   const resp = await fetch(tokenUrl, { method: "POST" });
   if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`);
   const { token, model } = await resp.json();
-
   setStatus("Connecting to Gemini Live...");
   setChip(geminiChip, "connecting", "Gemini: Connecting...");
-
   const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
   ws = new WebSocket(wsUrl);
-
   ws.onopen = () => {
-    const setupMsg = {
+    ws.send(JSON.stringify({
       setup: {
         model: `models/${model}`,
         generationConfig: {
           responseModalities: ["AUDIO"],
           temperature: 1.0,
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Puck" },
-            },
-          },
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
         },
         systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
         tools: [{ functionDeclarations: TOOL_DEFS }],
         inputAudioTranscription: {},
         outputAudioTranscription: {},
         realtimeInputConfig: {
-          automaticActivityDetection: {
-            disabled: false,
-            silenceDurationMs: 2000,
-            prefixPaddingMs: 500,
-            endOfSpeechSensitivity: "END_SENSITIVITY_UNSPECIFIED",
-            startOfSpeechSensitivity: "START_SENSITIVITY_UNSPECIFIED",
-          },
+          automaticActivityDetection: { disabled: false, silenceDurationMs: 2000, prefixPaddingMs: 500 },
           turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
         },
       },
-    };
-    ws.send(JSON.stringify(setupMsg));
+    }));
   };
-
   ws.onmessage = async (event) => {
     let jsonData;
-    if (event.data instanceof Blob) {
-      jsonData = await event.data.text();
-    } else if (event.data instanceof ArrayBuffer) {
-      jsonData = new TextDecoder().decode(event.data);
-    } else {
-      jsonData = event.data;
-    }
-
+    if (event.data instanceof Blob) jsonData = await event.data.text();
+    else if (event.data instanceof ArrayBuffer) jsonData = new TextDecoder().decode(event.data);
+    else jsonData = event.data;
     let data;
-    try {
-      data = JSON.parse(jsonData);
-    } catch (e) {
-      return;
-    }
+    try { data = JSON.parse(jsonData); } catch (e) { return; }
     handleMessage(data);
   };
-
   ws.onerror = () => {
     setChip(geminiChip, "disconnected", "Gemini: Error");
     setStatus("Gemini connection error");
   };
-
   ws.onclose = (e) => {
     isConnected = false;
     setChip(geminiChip, "disconnected", "Gemini: Disconnected");
     setStatus(`Disconnected (code=${e.code})`);
-    // Attempt reconnect after 3s
-    setTimeout(() => {
-      if (!isConnected) {
-        addMsg("[Reconnecting to Gemini...]", "system");
-        connectGemini();
-      }
-    }, 3000);
+    setTimeout(() => { if (!isConnected) { addConversation("[Reconnecting...]", "system"); connectGemini(); } }, 3000);
   };
 }
 
-// ─── Handle Gemini Live messages ─────────────────────────────
 function handleMessage(data) {
   const sc = data?.serverContent;
-
   if (data?.setupComplete) {
     isConnected = true;
     setChip(geminiChip, "connected", "Gemini: Connected");
-    setStatus("Connected — waiting for meeting audio");
-    addMsg("[Gemini Live connected]", "system");
-
-    // Start sending meeting audio to Gemini
+    setStatus("Connected — waiting for audio");
+    addConversation("[Deltomic AI connected]", "system");
+    addConversation("Hello! I'm Deltomic, your AI support agent. How can I help you today?", "assistant");
     startSendingToGemini();
     return;
   }
-
-  if (data?.toolCall) {
-    handleToolCall(data.toolCall);
-    return;
-  }
-
+  if (data?.toolCall) { handleToolCall(data.toolCall); return; }
   const parts = sc?.modelTurn?.parts;
   if (parts?.length) {
     for (const part of parts) {
-      if (part.inlineData) {
-        playAudio(part.inlineData.data);
-      } else if (part.text) {
-        console.log("TEXT:", part.text);
+      if (part.inlineData) playAudio(part.inlineData.data);
+      else if (part.text) console.log("TEXT:", part.text);
+    }
+  }
+  if (sc?.inputTranscription) {
+    const text = sc.inputTranscription.text || "";
+    if (text && !sc.inputTranscription.finished) addConversation(text, "user");
+  }
+  if (sc?.outputTranscription) {
+    const text = sc.outputTranscription.text || "";
+    if (text) {
+      if (!sc.outputTranscription.finished) {
+        updateLastAssistantMessage(text);
+      } else {
+        updateLastAssistantMessage(text);
       }
     }
   }
-
-  if (sc?.inputTranscription) {
-    const text = sc.inputTranscription.text || "";
-    if (text && !sc.inputTranscription.finished) {
-      addMsg(text, "user");
-    }
-  }
-
-  if (sc?.outputTranscription) {
-    const text = sc.outputTranscription.text || "";
-    if (text && !sc.outputTranscription.finished) {
-      addMsg(text, "assistant");
-    }
-  }
-
   if (sc?.interrupted) {
     if (playerWorklet) playerWorklet.port.postMessage("interrupt");
   }
 }
 
-// ─── Tool call handling ──────────────────────────────────────
 async function handleToolCall(toolCall) {
   const functionResponses = [];
-
   for (const fc of toolCall.functionCalls || []) {
     const name = fc.name;
     const args = fc.args || {};
     let result;
 
     try {
-      if (name === "run_command") {
-        const resp = await fetch(`${BACKEND_URL}/chat`, {
+      if (name === "delegate_task") {
+        addConversation(`Working on: ${args.task_description}`, "system");
+        
+        const startResp = await fetch(`${BACKEND_URL}/task/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: `Execute command: ${args.command}`,
+            task_description: args.task_description,
             grant_id: GRANT_ID,
+            agent_id: AGENT_ID,
           }),
         });
-        const data = await resp.json();
-        result = data.response || "Command executed";
-        addMsg(`Executed: ${args.command}`, "tool");
-      } else if (name === "list_available_commands") {
-        const resp = await fetch(`${BACKEND_URL}/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            message: "List available commands",
-            grant_id: GRANT_ID,
-          }),
-        });
-        const data = await resp.json();
-        result = data.response || "Commands listed";
-        addMsg("Listed available commands", "tool");
+        
+        if (!startResp.ok) {
+          const errorData = await startResp.json().catch(() => ({ detail: "Unknown error" }));
+          result = `Task failed: ${errorData.detail || startResp.statusText}`;
+          addConversation(result, "tool");
+        } else {
+          const startData = await startResp.json();
+          const taskId = startData.task_id;
+          
+          const eventSource = new EventSource(`${BACKEND_URL}/task/${taskId}/events`);
+          let taskSummary = "";
+          
+          eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === "task_start") {
+              addConversation(`Task started`, "system");
+            } else if (data.type === "command_start") {
+              const blockId = addCommandBlock(data.command, "running");
+              blockId;
+            } else if (data.type === "command_complete") {
+              const blocks = commandsEl.querySelectorAll('.cmd-block');
+              const lastBlock = blocks[blocks.length - 1];
+              if (lastBlock) {
+                const blockId = lastBlock.id;
+                updateCommandBlock(blockId, data.output, data.status);
+              }
+            } else if (data.type === "approval_required") {
+              showApprovalCard(data.command, taskId);
+            } else if (data.type === "task_complete") {
+              taskSummary = data.summary;
+              eventSource.close();
+              addConversation(`Task completed: ${taskSummary}`, "tool");
+            } else if (data.type === "task_error") {
+              taskSummary = `Error: ${data.error}`;
+              eventSource.close();
+              addConversation(taskSummary, "tool");
+            }
+          };
+          
+          eventSource.onerror = () => {
+            eventSource.close();
+            if (!taskSummary) {
+              addConversation("Task stream ended", "system");
+            }
+          };
+          
+          await new Promise((resolve) => {
+            const checkDone = setInterval(() => {
+              if (eventSource.readyState === EventSource.CLOSED) {
+                clearInterval(checkDone);
+                resolve();
+              }
+            }, 100);
+          });
+          
+          result = taskSummary || "Task completed";
+        }
       } else if (name === "revoke_access") {
-        const resp = await fetch(`${BACKEND_URL}/sessions/${AGENT_ID}/end`, {
-          method: "POST",
-        });
+        const resp = await fetch(`${BACKEND_URL}/sessions/${AGENT_ID}/end`, { method: "POST" });
         result = "Access revoked, session ended";
-        addMsg("Session ended", "tool");
+        addConversation("Session ended", "tool");
       } else {
         result = "Unknown tool.";
       }
     } catch (e) {
       console.error("Tool error:", e);
       result = `Error: ${e.message}`;
+      addConversation(`Tool error: ${name}`, "tool");
     }
 
-    functionResponses.push({
-      id: fc.id,
-      name: name,
-      response: { result },
-    });
+    functionResponses.push({ id: fc.id, name: name, response: { result } });
   }
-
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
   }
 }
 
-// ─── Boot sequence ────────────────────────────────────────────
-async function boot() {
-  setStatus("Booting agent...");
-  addMsg("[Agent booting up]", "system");
+function showApprovalCard(command, taskId) {
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  
+  const title = document.createElement("div");
+  title.className = "approval-title";
+  title.textContent = "Action Requires Approval";
+  card.appendChild(title);
+  
+  const action = document.createElement("div");
+  action.className = "approval-action";
+  action.textContent = `The agent needs to run: ${command}`;
+  card.appendChild(action);
+  
+  const consequence = document.createElement("div");
+  consequence.className = "approval-consequence";
+  consequence.textContent = "This action may modify system files or data. Please confirm if you want to proceed.";
+  card.appendChild(consequence);
+  
+  const recommendation = document.createElement("div");
+  recommendation.className = "approval-recommendation";
+  recommendation.textContent = "Say 'yes' to approve or 'no' to deny";
+  card.appendChild(recommendation);
+  
+  conversationEl.appendChild(card);
+  conversationEl.scrollTop = conversationEl.scrollHeight;
+  
+  addConversation(`Approval required for: ${command}`, "system");
+}
 
-  // 1. Get meeting audio from Recall bot's auto-granted getUserMedia
-  const gotAudio = await getMeetingAudio();
-
-  // 2. Connect to Gemini Live
+async function loadContext() {
   try {
-    await connectGemini();
+    const sessionResp = await fetch(`${BACKEND_URL}/sessions/${AGENT_ID}`);
+    if (sessionResp.ok) {
+      const sessionData = await sessionResp.json();
+      if (sessionData.email) {
+        const ctxResp = await fetch(`${BACKEND_URL}/admin/tenant-context/${encodeURIComponent(sessionData.email)}`);
+        if (ctxResp.ok) {
+          const ctxData = await ctxResp.json();
+          const context = ctxData.context;
+          if (context && context.includes("PREVIOUS SESSIONS")) {
+            contextBanner.className = "has-history";
+            contextBanner.textContent = "Previous sessions available";
+          }
+        }
+      }
+      if (sessionData.task_context) {
+        SYSTEM_PROMPT += `\n\nCUSTOMER'S CURRENT REQUEST: ${sessionData.task_context}\nThis is the priority. Start working on it immediately after greeting the customer.`;
+        addConversation(`[Task: ${sessionData.task_context.substring(0, 80)}...]`, "system");
+      }
+    }
   } catch (e) {
-    setStatus("Failed to connect to Gemini: " + e.message);
-    addMsg(`Gemini error: ${e.message}`, "system");
-    // Retry after 5s
+    console.error("Failed to load context:", e);
+  }
+}
+
+async function boot() {
+  setStatus("Booting Deltomic agent...");
+  addConversation("[Agent booting]", "system");
+  await loadContext();
+  const gotAudio = await getMeetingAudio();
+  try { await connectGemini(); } catch (e) {
+    setStatus("Failed: " + e.message);
+    addConversation(`Error: ${e.message}`, "system");
     setTimeout(boot, 5000);
     return;
   }
-
-  // 3. If we didn't get meeting audio, still try to send a greeting
-  //    The agent can still speak even without receiving audio
   if (!gotAudio) {
-    addMsg("[No meeting audio — agent will listen when available]", "system");
+    addConversation("[No audio yet — will listen when available]", "system");
     setTimeout(() => {
       if (!isReceiving && ws && ws.readyState === WebSocket.OPEN) {
-        // Send a greeting prompt
         ws.send(JSON.stringify({
-          clientContent: {
-            parts: [{ text: "Greet the customer and ask how you can help with their server issue." }],
-            turnComplete: true,
-          },
+          clientContent: { parts: [{ text: "Greet the customer and ask how you can help." }], turnComplete: true },
         }));
       }
     }, 3000);
