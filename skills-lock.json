@@ -55,6 +55,12 @@
       "skillPath": "skills/cockroachdb-security-and-governance/configuring-audit-logging/SKILL.md",
       "computedHash": "074b122fd141e6f255bcf628f8e043376a1a8c77dbdc43645a754eac178458d4"
     },
+    "configuring-ip-allowlists": {
+      "source": "cockroachlabs/cockroachdb-skills",
+      "sourceType": "github",
+      "skillPath": "skills/cockroachdb-security-and-governance/configuring-ip-allowlists/SKILL.md",
+      "computedHash": "e11989eec8c7f070508d155001bfa4ebc09cf41d88a7c5db296a3c59707afaf8"
+    },
     "configuring-log-export": {
       "source": "cockroachlabs/cockroachdb-skills",
       "sourceType": "github",
