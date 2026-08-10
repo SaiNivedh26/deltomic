@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Deltomic Test Agent</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; height: 100vh; display: flex; flex-direction: column; }
+    .header { background: #111; padding: 12px 20px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 16px; font-weight: 600; }
+    .status { font-size: 13px; color: #888; }
+    .main { flex: 1; display: flex; overflow: hidden; }
+    .left-panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #222; }
+    .right-panel { width: 400px; display: flex; flex-direction: column; }
+    .panel-header { background: #111; padding: 10px 16px; border-bottom: 1px solid #222; font-size: 13px; font-weight: 600; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+    
+    .chat-container { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    
+    .message { display: flex; gap: 12px; max-width: 85%; }
+    .message.user { align-self: flex-end; flex-direction: row-reverse; }
+    .message.agent { align-self: flex-start; }
+    
+    .avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+    .message.user .avatar { background: #4a9eff; color: white; }
+    .message.agent .avatar { background: #10b981; color: white; }
+    
+    .bubble { padding: 12px 16px; border-radius: 12px; line-height: 1.6; font-size: 14px; word-wrap: break-word; white-space: pre-wrap; }
+    .message.user .bubble { background: #1e3a5f; border-bottom-right-radius: 4px; }
+    .message.agent .bubble { background: #1a1a1a; border-bottom-left-radius: 4px; }
+    
+    .reasoning-block { margin-top: 16px; padding: 12px 16px; background: rgba(245, 158, 11, 0.05); border-left: 2px solid #f59e0b; border-radius: 4px; }
+    .reasoning-header { font-size: 11px; color: #f59e0b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+    .reasoning-content { font-size: 13px; color: #999; line-height: 1.7; }
+    .reasoning-step { padding: 4px 0; padding-left: 12px; position: relative; }
+    .reasoning-step::before { content: "•"; position: absolute; left: 0; color: #f59e0b; }
+    .reasoning-step:last-child { padding-bottom: 0; }
+    
+    .commands { flex: 1; overflow-y: auto; padding: 16px; }
+    .cmd-block { background: #111; border: 1px solid #222; border-radius: 6px; padding: 12px; margin-bottom: 10px; font-family: 'Courier New', monospace; font-size: 13px; }
+    .cmd-block .cmd { color: #4a9eff; margin-bottom: 6px; }
+    .cmd-block .output { color: #888; white-space: pre-wrap; font-size: 12px; }
+    .cmd-block.running { border-color: #f59e0b; }
+    .cmd-block.success { border-color: #10b981; }
+    .cmd-block.error { border-color: #ef4444; }
+    
+    .controls { background: #111; padding: 12px 16px; border-top: 1px solid #222; display: flex; gap: 10px; align-items: center; }
+    .controls input { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; padding: 10px 14px; color: #e5e5e5; font-size: 14px; }
+    .controls input:focus { outline: none; border-color: #4a9eff; }
+    .controls button { background: #4a9eff; border: none; border-radius: 6px; padding: 10px 20px; color: white; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s; }
+    .controls button:hover { background: #3b82f6; }
+    .controls button:disabled { background: #333; cursor: not-allowed; }
+    
+    .task-banner { background: #1a1a1a; padding: 10px 16px; border-bottom: 1px solid #222; font-size: 13px; color: #888; }
+    .task-banner strong { color: #e5e5e5; }
+    .chips { display: flex; gap: 8px; margin-bottom: 10px; padding: 10px 16px; background: #111; border-bottom: 1px solid #222; }
+    .chip { padding: 4px 12px; border-radius: 12px; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
+    .chip.off { background: #374151; color: #9ca3af; }
+    .chip.on { background: #10b981; color: white; }
+    .chip.connecting { background: #f59e0b; color: white; }
+    .mic-btn { width: 56px; height: 56px; border-radius: 50%; border: 2px solid #374151; background: #1a1a2e; color: #9ca3af; font-size: 20px; cursor: pointer; transition: all 0.2s; }
+    .mic-btn:hover { border-color: #4a9eff; background: #1e1e3a; }
+    .mic-btn.active { border-color: #10b981; background: rgba(16, 185, 129, 0.1); color: #10b981; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); } 50% { box-shadow: 0 0 0 16px rgba(16, 185, 129, 0); } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Deltomic Test Agent</h1>
+    <div class="status" id="status">Press mic to start</div>
+  </div>
+  
+  <div class="task-banner">
+    <strong>Task:</strong> <span id="taskContext">Customer reports high CPU usage on production server. Investigate and resolve.</span>
+  </div>
+  
+  <div class="chips">
+    <span class="chip off" id="geminiChip">Gemini: Off</span>
+    <span class="chip off" id="micChip">Mic: Off</span>
+    <span class="chip off" id="audioChip">Audio: Off</span>
+    <button class="mic-btn" id="micBtn" onclick="toggleMic()">🎤</button>
+  </div>
+  
+  <div class="main">
+    <div class="left-panel">
+      <div class="panel-header">Conversation</div>
+      <div class="chat-container" id="chatContainer"></div>
+      <div class="controls">
+        <input type="text" id="userInput" placeholder="Type your message..." />
+        <button id="sendBtn" onclick="sendUserMessage()">Send</button>
+      </div>
+    </div>
+    
+    <div class="right-panel">
+      <div class="panel-header">Commands</div>
+      <div class="commands" id="commands"></div>
+    </div>
+  </div>
+
+  <script>
+    const BACKEND_URL = window.location.origin;
+    const GEMINI_MODEL = "gemini-3.1-flash-live-preview";
+    
+    let ws = null;
+    let isConnected = false;
+    let isListening = false;
+    let audioContext = null;
+    let mediaStream = null;
+    let workletNode = null;
+    let playerContext = null;
+    let playerWorklet = null;
+    let currentAgentMessage = null;
+    let currentUserMessage = null;
+    
+    const SYSTEM_PROMPT = `You are Deltomic, an AI support agent helping a customer with their server issue. You are PROACTIVE and CONVERSATIONAL.
+
+CRITICAL - IMMEDIATE GREETING:
+- As soon as the conversation starts, IMMEDIATELY greet the customer with a warm introduction
+- Do NOT wait for the user to speak first - you must speak first
+- Say: "Hi, I'm Deltomic. I can see you're dealing with [issue]. Let me help you with that."
+- Then ask if they can provide more details about the issue
+
+YOUR BEHAVIOR:
+1. Greet the customer warmly and introduce yourself IMMEDIATELY when the conversation starts
+2. If you have context about their issue, acknowledge it: "I see you're having issues with X"
+3. Ask the customer for more details about the issue
+4. Once you understand the issue, explain your investigation plan in plain language
+5. Use delegate_task to execute commands, but KEEP TALKING while it runs
+6. As commands execute, narrate what's happening: "I'm checking the CPU usage now..."
+7. When results come back, explain what you found and what you'll do next
+8. Ask the customer if they have questions or if the solution makes sense
+9. When complete, use revoke_access to end the session
+
+CRITICAL - STAY PROACTIVE:
+- Never go silent. Keep explaining what you're doing
+- Don't wait for the customer to ask questions - anticipate them
+- Explain technical findings in plain language
+- If a command fails, explain what went wrong and what you'll try next
+- Treat this like a real conversation, not a command line
+
+Available tools:
+- delegate_task(task_description): Send work to execution agent. Explain what you're doing BEFORE calling this.
+- revoke_access(reason): End the session when everything is resolved
+
+Rules:
+- Keep responses conversational and natural
+- No emojis, no markdown, no bullet points in speech
+- Be professional, empathetic, and helpful
+- The working directory is /home/ubuntu`;
+
+    function log(msg) {
+      const timestamp = new Date().toLocaleTimeString();
+      console.log(`[${timestamp}] ${msg}`);
+    }
+
+    function setStatus(text) {
+      document.getElementById('status').textContent = text;
+      log(`Status: ${text}`);
+    }
+
+    function setChip(el, state, label) {
+      el.className = `chip ${state}`;
+      el.textContent = label;
+      log(`Chip: ${label}`);
+    }
+
+    function addConversation(text, type, reasoning = null) {
+      const chat = document.getElementById('chatContainer');
+      
+      // Check if we're streaming and should append to existing message
+      if (type === 'agent' && currentAgentMessage && !reasoning) {
+        currentAgentMessage.textContent += text;
+        chat.scrollTop = chat.scrollHeight;
+        log(`Streaming agent: ${text.substring(0, 50)}`);
+        return;
+      }
+      
+      if (type === 'user' && currentUserMessage) {
+        currentUserMessage.textContent += text;
+        chat.scrollTop = chat.scrollHeight;
+        log(`Streaming user: ${text.substring(0, 50)}`);
+        return;
+      }
+      
+      // Create new message
+      const msg = document.createElement('div');
+      msg.className = `message ${type}`;
+      
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = type === 'user' ? 'U' : 'A';
+      
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = text;
+      
+      if (reasoning) {
+        const reasoningBlock = document.createElement('div');
+        reasoningBlock.className = 'reasoning-block';
+        
+        const header = document.createElement('div');
+        header.className = 'reasoning-header';
+        header.textContent = 'Reasoning Steps';
+        
+        const content = document.createElement('div');
+        content.className = 'reasoning-content';
+        
+        reasoning.forEach(step => {
+          const stepDiv = document.createElement('div');
+          stepDiv.className = 'reasoning-step';
+          stepDiv.textContent = step;
+          content.appendChild(stepDiv);
+        });
+        
+        reasoningBlock.appendChild(header);
+        reasoningBlock.appendChild(content);
+        bubble.appendChild(reasoningBlock);
+      }
+      
+      msg.appendChild(avatar);
+      msg.appendChild(bubble);
+      chat.appendChild(msg);
+      chat.scrollTop = chat.scrollHeight;
+      
+      // Track current streaming message
+      if (type === 'agent' && !reasoning) {
+        currentAgentMessage = bubble;
+      } else if (type === 'user') {
+        currentUserMessage = bubble;
+      }
+      
+      log(`Conversation [${type}]: ${text.substring(0, 100)}`);
+    }
+
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    function convertToPCM16(float32Array) {
+      const int16 = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        int16[i] = s * 0x7fff;
+      }
+      return int16.buffer;
+    }
+
+    async function initPlayer() {
+      if (playerContext) return;
+      log("Initializing audio player...");
+      playerContext = new AudioContext({ sampleRate: 24000 });
+      await playerContext.audioWorklet.addModule("../static/audio-processors/playback.worklet.js");
+      playerWorklet = new AudioWorkletNode(playerContext, "pcm-processor");
+      playerWorklet.connect(playerContext.destination);
+      setChip(audioChip, "on", "Audio: On");
+      log("Audio player initialized");
+    }
+
+    async function playAudio(base64Audio) {
+      log(`Playing audio chunk (${base64Audio.length} bytes)`);
+      if (!playerWorklet) await initPlayer();
+      if (playerContext.state === "suspended") {
+        log("Resuming audio context...");
+        await playerContext.resume();
+      }
+      const binary = atob(base64Audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+      playerWorklet.port.postMessage(float32);
+      log("Audio chunk sent to worklet");
+    }
+
+    async function startMic() {
+      try {
+        log("Requesting microphone access...");
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+          video: false,
+        });
+        log("Microphone access granted");
+        
+        audioContext = new AudioContext({ sampleRate: 16000 });
+        log("Audio context created for mic (16kHz)");
+        await audioContext.audioWorklet.addModule("../static/audio-processors/capture.worklet.js");
+        log("Capture worklet loaded");
+        workletNode = new AudioWorkletNode(audioContext, "audio-capture-processor");
+        
+        let silenceSent = false;
+        
+        workletNode.port.onmessage = (event) => {
+          if (event.data.type === "audio") {
+            const pcm16 = convertToPCM16(event.data.data);
+            const base64 = arrayBufferToBase64(pcm16);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                realtimeInput: { audio: { mimeType: "audio/pcm", data: base64 } },
+              }));
+              
+              // Send silence audio once to trigger model to greet
+              if (!silenceSent) {
+                silenceSent = true;
+                log("Sending initial silence to trigger greeting...");
+                setTimeout(() => {
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    // Send 1 second of silence (16000 samples = 1 second at 16kHz)
+                    const silence = new Float32Array(16000);
+                    const silencePcm16 = convertToPCM16(silence);
+                    const silenceBase64 = arrayBufferToBase64(silencePcm16);
+                    ws.send(JSON.stringify({
+                      realtimeInput: { audio: { mimeType: "audio/pcm", data: silenceBase64 } },
+                    }));
+                    log("Silence sent - model should greet now");
+                  }
+                }, 500);
+              }
+            }
+          }
+        };
+        
+        const source = audioContext.createMediaStreamSource(mediaStream);
+        source.connect(workletNode);
+        
+        setChip(micChip, "on", "Mic: Streaming");
+        log("Microphone streaming started");
+        isListening = true;
+      } catch (e) {
+        log("Microphone error: " + e.message);
+        console.error(e);
+        setChip(micChip, "off", "Mic: Error");
+      }
+    }
+
+    function stopMic() {
+      log("Stopping microphone...");
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+      workletNode = null;
+      setChip(micChip, "off", "Mic: Off");
+      isListening = false;
+      log("Microphone stopped");
+    }
+
+    async function connectGemini() {
+      try {
+        log("=== Starting Gemini connection ===");
+        setStatus("Fetching token...");
+        setChip(geminiChip, "connecting", "Gemini: Token...");
+        
+        const resp = await fetch("/api/token", { method: "POST" });
+        log(`Token response status: ${resp.status}`);
+        if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`);
+        
+        const { token, model } = await resp.json();
+        log(`Token received, model: ${model}`);
+        
+        setStatus("Connecting to Gemini...");
+        setChip(geminiChip, "connecting", "Gemini: Connecting...");
+        
+        const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
+        log(`WebSocket URL: ${wsUrl.substring(0, 100)}...`);
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+          log("WebSocket connected, sending setup...");
+          ws.send(JSON.stringify({
+            setup: {
+              model: `models/${model}`,
+              generationConfig: {
+                responseModalities: ["AUDIO"],
+                temperature: 0.7,
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
+              },
+              systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
+              realtimeInputConfig: {
+                automaticActivityDetection: { disabled: false, silenceDurationMs: 2000, prefixPaddingMs: 500 },
+                turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+              },
+              tools: [{
+                functionDeclarations: [
+                  { name: "delegate_task", description: "Send a task to execution agent", parameters: { type: "OBJECT", properties: { task_description: { type: "STRING", description: "What to investigate or fix" } }, required: ["task_description"] } },
+                  { name: "revoke_access", description: "End the session", parameters: { type: "OBJECT", properties: { reason: { type: "STRING" } } } }
+                ]
+              }]
+            }
+          }));
+          log("Setup message sent");
+        };
+        
+        ws.onmessage = async (event) => {
+          let jsonData;
+          if (event.data instanceof Blob) jsonData = await event.data.text();
+          else if (event.data instanceof ArrayBuffer) jsonData = new TextDecoder().decode(event.data);
+          else jsonData = event.data;
+          
+          let data;
+          try { data = JSON.parse(jsonData); } catch (e) { 
+            log("Failed to parse message: " + e.message);
+            return; 
+          }
+          log(`Received message: ${JSON.stringify(data).substring(0, 200)}`);
+          handleMessage(data);
+        };
+        
+        ws.onerror = (e) => {
+          log("WebSocket error");
+          console.error("WebSocket error:", e);
+          setChip(geminiChip, "off", "Gemini: Error");
+          setStatus("Connection error");
+        };
+        
+        ws.onclose = (e) => {
+          log(`WebSocket closed: code=${e.code}, reason=${e.reason}`);
+          isConnected = false;
+          setChip(geminiChip, "off", "Gemini: Disconnected");
+          setStatus(`Disconnected (code=${e.code})`);
+        };
+      } catch (e) {
+        log("Connection error: " + e.message);
+        console.error("Connection error:", e);
+        setChip(geminiChip, "off", "Gemini: Error");
+        setStatus("Error: " + e.message);
+      }
+    }
+
+    function handleMessage(data) {
+      log(`handleMessage called with keys: ${Object.keys(data).join(', ')}`);
+      const sc = data?.serverContent;
+      
+      if (data?.setupComplete) {
+        log("=== Setup complete ===");
+        isConnected = true;
+        setChip(geminiChip, "on", "Gemini: Connected");
+        setStatus("Connected - press mic to start");
+        addConversation("[Agent connected - press mic to start]", "agent");
+        
+        return;
+      }
+      
+      if (data?.toolCall) {
+        log(`Tool call received: ${JSON.stringify(data.toolCall)}`);
+        handleToolCall(data.toolCall);
+        return;
+      }
+      
+      const parts = sc?.modelTurn?.parts;
+      if (parts?.length) {
+        log(`Model turn with ${parts.length} parts`);
+        for (const part of parts) {
+          if (part.inlineData) {
+            playAudio(part.inlineData.data);
+          }
+          // Don't add text here - outputTranscription handles it
+        }
+      }
+      
+      if (sc?.inputTranscription) {
+        const text = sc.inputTranscription.text || "";
+        if (text) {
+          log(`Input transcription: ${text} (finished: ${sc.inputTranscription.finished})`);
+          addConversation(text, "user");
+          if (sc.inputTranscription.finished) {
+            currentUserMessage = null;
+          }
+        }
+      }
+      
+      if (sc?.outputTranscription) {
+        const text = sc.outputTranscription.text || "";
+        if (text) {
+          log(`Output transcription: ${text} (finished: ${sc.outputTranscription.finished})`);
+          addConversation(text, "agent");
+          if (sc.outputTranscription.finished) {
+            currentAgentMessage = null;
+          }
+        }
+      }
+      
+      if (sc?.turnComplete) {
+        log("Turn complete - finalizing messages");
+        currentAgentMessage = null;
+        currentUserMessage = null;
+      }
+      
+      if (sc?.interrupted) {
+        log("Interrupted by user");
+        currentAgentMessage = null;
+        currentUserMessage = null;
+        if (playerWorklet) playerWorklet.port.postMessage("interrupt");
+      }
+    }
+
+    async function handleToolCall(toolCall) {
+      log(`=== handleToolCall started ===`);
+      const functionResponses = [];
+      
+      for (const fc of toolCall.functionCalls || []) {
+        const name = fc.name;
+        const args = fc.args || {};
+        log(`Processing function call: ${name} with args: ${JSON.stringify(args)}`);
+        let result;
+
+        try {
+          if (name === "delegate_task") {
+            log(`Delegating task: ${args.task_description}`);
+            
+            const reasoningSteps = [
+              "Analyzing the issue...",
+              "Formulating investigation plan...",
+              "Handing off to Qwen for execution..."
+            ];
+            
+            addConversation(`I'll investigate this by running some diagnostic commands. Let me delegate this to our execution engine.`, "agent", reasoningSteps);
+            
+            const startResp = await fetch(`${BACKEND_URL}/task/stream`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                task_description: args.task_description,
+                grant_id: "test-grant-id",
+                agent_id: "test-agent-id",
+                email: "test@example.com",
+              }),
+            });
+            log(`Task stream response status: ${startResp.status}`);
+            
+            if (!startResp.ok) {
+              result = `Task failed: ${startResp.statusText}`;
+              addConversation(result, "agent");
+            } else {
+              const startData = await startResp.json();
+              const taskId = startData.task_id;
+              log(`Task started with ID: ${taskId}`);
+              
+              result = `Task started. I'm investigating ${args.task_description}. I'll update you as I find things.`;
+              
+              const eventSource = new EventSource(`${BACKEND_URL}/task/${taskId}/events`);
+              let taskSummary = "";
+              let commandCount = 0;
+              
+              eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                log(`Task event: ${data.type}`);
+                
+                if (data.type === "task_start") {
+                  addConversation(`Investigating...`, "agent");
+                } else if (data.type === "command_start") {
+                  commandCount++;
+                  const block = document.createElement('div');
+                  block.className = 'cmd-block running';
+                  block.id = `cmd-${Date.now()}`;
+                  block.innerHTML = `<div class="cmd">$ ${data.command}</div><div class="output">Running...</div>`;
+                  document.getElementById('commands').appendChild(block);
+                  addConversation(`Running command ${commandCount}...`, "agent");
+                } else if (data.type === "command_complete") {
+                  const blocks = document.querySelectorAll('.cmd-block');
+                  const lastBlock = blocks[blocks.length - 1];
+                  if (lastBlock) {
+                    lastBlock.className = `cmd-block ${data.status}`;
+                    lastBlock.querySelector('.output').textContent = data.output;
+                  }
+                } else if (data.type === "task_complete") {
+                  taskSummary = data.summary;
+                  eventSource.close();
+                  log(`Task complete: ${taskSummary}`);
+                  
+                  const summaryReasoning = [
+                    "Analyzing results from all commands...",
+                    "Identifying root cause...",
+                    "Formulating solution..."
+                  ];
+                  addConversation(`Here's what I found: ${taskSummary}`, "agent", summaryReasoning);
+                  
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    log("Sending task results back to Gemini...");
+                    ws.send(JSON.stringify({
+                      clientContent: {
+                        turns: [{ role: "user", parts: [{ text: `The investigation is complete. Here's what I found: ${taskSummary}. Now explain this to the customer in plain language and ask if they need anything else.` }]}],
+                        turnComplete: true,
+                      },
+                    }));
+                    log("Task results sent to Gemini");
+                  } else {
+                    log("WARNING: WebSocket not open when trying to send task results");
+                  }
+                } else if (data.type === "task_error") {
+                  taskSummary = `Error: ${data.error}`;
+                  eventSource.close();
+                  log(`Task error: ${data.error}`);
+                  addConversation(taskSummary, "agent");
+                }
+              };
+              
+              eventSource.onerror = (e) => {
+                log(`EventSource error: ${e}`);
+                eventSource.close();
+              };
+            }
+          } else if (name === "revoke_access") {
+            log("Revoking access...");
+            result = "Session ended";
+            addConversation("Session ended", "agent");
+          } else {
+            log(`Unknown tool: ${name}`);
+            result = "Unknown tool.";
+          }
+        } catch (e) {
+          log(`Tool error: ${e.message}`);
+          console.error("Tool error:", e);
+          result = `Error: ${e.message}`;
+          addConversation(`Tool error: ${name}`, "agent");
+        }
+
+        functionResponses.push({ id: fc.id, name: name, response: { result } });
+      }
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        log(`Sending tool response: ${JSON.stringify(functionResponses)}`);
+        ws.send(JSON.stringify({ toolResponse: { functionResponses } }));
+      } else {
+        log("WARNING: WebSocket not open when trying to send tool response");
+      }
+    }
+
+    let firstMessage = true;
+    
+    function sendUserMessage() {
+      const input = document.getElementById('userInput');
+      const text = input.value.trim();
+      if (!text || !isConnected) return;
+      
+      log(`Sending user message: ${text}`);
+      addConversation(text, "user");
+      currentUserMessage = null; // Finalize user message
+      input.value = "";
+      
+      let messageText = text;
+      if (firstMessage) {
+        messageText = `The customer's issue is: Customer reports high CPU usage on production server. The customer says: "${text}". Greet them briefly, acknowledge you understand their issue, explain your investigation plan, and call delegate_task to start investigating.`;
+        firstMessage = false;
+        log("First message - added task context");
+      }
+      
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          clientContent: { turns: [{ role: "user", parts: [{ text: messageText }] }], turnComplete: true },
+        }));
+        log("User message sent to Gemini");
+      }
+    }
+
+    async function toggleMic() {
+      log(`toggleMic called, isListening=${isListening}, isConnected=${isConnected}`);
+      if (!isListening) {
+        document.getElementById('micBtn').classList.add("active");
+        setStatus("Starting...");
+        
+        if (!isConnected) {
+          log("Not connected, calling connectGemini...");
+          await connectGemini();
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        log("Starting microphone...");
+        await startMic();
+        setStatus("Listening...");
+      } else {
+        log("Stopping microphone...");
+        document.getElementById('micBtn').classList.remove("active");
+        stopMic();
+        setStatus("Stopped - press mic to talk again");
+      }
+    }
+
+    document.getElementById('userInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendUserMessage();
+    });
+  </script>
+</body>
+</html>

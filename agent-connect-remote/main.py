@@ -57,6 +57,18 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+TEST_DIR = Path(__file__).parent.parent / "test"
+if TEST_DIR.exists():
+    app.mount("/test", StaticFiles(directory=TEST_DIR, html=True), name="test")
+
+
+@app.get("/test")
+async def serve_test_page():
+    test_path = TEST_DIR / "index.html"
+    if not test_path.exists():
+        raise HTTPException(status_code=404, detail="test page not found")
+    return FileResponse(test_path)
+
 
 @app.on_event("startup")
 async def wipe_machines_on_startup():
@@ -65,6 +77,41 @@ async def wipe_machines_on_startup():
     with get_cursor() as cur:
         cur.execute("DELETE FROM customer_machines")
         logger.info("Wiped customer_machines table on startup")
+    
+    import asyncio
+    asyncio.create_task(stale_session_cleanup_loop())
+
+
+async def stale_session_cleanup_loop():
+    """Periodically end sessions that have been inactive for too long."""
+    import asyncio
+    logger = logging.getLogger(__name__)
+    
+    while True:
+        try:
+            await asyncio.sleep(300)
+            
+            from backend.db import get_cursor
+            with get_cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE session_history
+                    SET resolution_status = 'timeout', ended_at = now()
+                    WHERE ended_at IS NULL
+                    AND started_at < NOW() - INTERVAL '30 minutes'
+                    AND id NOT IN (
+                        SELECT DISTINCT session_id 
+                        FROM tool_call_logs 
+                        WHERE created_at > NOW() - INTERVAL '30 minutes'
+                    )
+                    RETURNING agent_id, id
+                    """
+                )
+                ended = cur.fetchall()
+                if ended:
+                    logger.info(f"Cleaned up {len(ended)} stale sessions")
+        except Exception as e:
+            logger.error(f"Stale session cleanup error: {e}")
 
 
 class ChatRequest(BaseModel):
@@ -126,6 +173,14 @@ async def serve_agent_html():
     return FileResponse(agent_path)
 
 
+@app.get("/test_agent.html")
+async def serve_test_agent_html():
+    test_path = STATIC_DIR / "test_agent.html"
+    if not test_path.exists():
+        raise HTTPException(status_code=404, detail="test_agent.html not found")
+    return FileResponse(test_path)
+
+
 @app.get("/audio-processors/{filename}")
 async def serve_audio_processor(filename: str):
     processor_path = STATIC_DIR / "audio-processors" / filename
@@ -178,6 +233,7 @@ class TaskRequest(BaseModel):
     task_description: str
     grant_id: str
     agent_id: str
+    email: str = ""
 
 
 @app.post("/task")
@@ -210,6 +266,7 @@ async def execute_task_stream(req: TaskRequest):
             task_description=req.task_description,
             grant_id=req.grant_id,
             agent_id=req.agent_id,
+            email=req.email,
         )
         return {"task_id": task_id, "status": "started"}
     except Exception as e:
@@ -566,14 +623,6 @@ async def get_session(agent_id: str):
     return session
 
 
-@app.post("/sessions/{agent_id}/end")
-async def end_session_endpoint(agent_id: str):
-    session = end_session(agent_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"status": "ended", "agent_id": agent_id}
-
-
 @app.get("/admin/tenants")
 async def admin_list_tenants(limit: int = 100, offset: int = 0):
     tenants = list_tenants(limit=limit, offset=offset)
@@ -687,3 +736,151 @@ async def serve_admin_dashboard():
     if not dashboard_path.exists():
         raise HTTPException(status_code=404, detail="admin.html not found")
     return FileResponse(dashboard_path)
+
+
+@app.post("/webhook/recall")
+async def recall_webhook(request: Request):
+    """Handle Recall webhook for meeting end notifications."""
+    try:
+        payload = await request.json()
+        logger.info(f"Recall webhook received: {payload}")
+        
+        event_type = payload.get("event", "")
+        bot_id = payload.get("bot_id", "")
+        
+        if event_type == "meeting_ended":
+            # Find agent by bot_id
+            from backend.pingram_handler import _active_sessions
+            agent_id = None
+            session_data = None
+            
+            for aid, sdata in _active_sessions.items():
+                if sdata.get("bot_id") == bot_id:
+                    agent_id = aid
+                    session_data = sdata
+                    break
+            
+            if agent_id and session_data:
+                from backend.meeting_end_handler import handle_meeting_end
+                await handle_meeting_end(agent_id, session_data)
+                return {"status": "processed", "agent_id": agent_id}
+            else:
+                logger.warning(f"No active session found for bot_id {bot_id}")
+                return {"status": "no_session_found", "bot_id": bot_id}
+        
+        return {"status": "ignored", "event": event_type}
+    
+    except Exception as e:
+        logger.error(f"Recall webhook error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sessions/{agent_id}/end")
+async def manual_end_session(agent_id: str):
+    """End a session - triggers full cleanup flow including email confirmation."""
+    from backend.pingram_handler import _active_sessions
+    from backend.db import get_cursor
+    
+    if agent_id in _active_sessions:
+        session_data = _active_sessions[agent_id]
+        del _active_sessions[agent_id]
+    else:
+        with get_cursor() as cur:
+            cur.execute(
+                """
+                SELECT sh.id as session_id, sh.agent_id, sh.grant_id, sh.task_description,
+                       t.email, t.company_name, t.contact_name
+                FROM session_history sh
+                LEFT JOIN tenants t ON t.id = sh.tenant_id
+                WHERE sh.agent_id = %s AND sh.ended_at IS NULL
+                ORDER BY sh.started_at DESC
+                LIMIT 1
+                """,
+                (agent_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                session_data = dict(row)
+            else:
+                raise HTTPException(status_code=404, detail="Session not found")
+    
+    from backend.meeting_end_handler import handle_meeting_end
+    await handle_meeting_end(agent_id, session_data)
+    
+    return {"status": "ended", "agent_id": agent_id}
+
+
+@app.post("/admin/sessions/{agent_id}/force-end")
+async def force_end_session(agent_id: str):
+    """Force end a session without full cleanup (for debugging)."""
+    from backend.db import get_cursor
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            UPDATE session_history
+            SET resolution_status = 'force_ended', ended_at = now()
+            WHERE agent_id = %s AND ended_at IS NULL
+            RETURNING id
+            """,
+            (agent_id,),
+        )
+        row = cur.fetchone()
+        if row:
+            return {"status": "force_ended", "session_id": row["id"]}
+        else:
+            raise HTTPException(status_code=404, detail="No active session found")
+
+
+@app.get("/self-healing/history")
+async def get_self_healing_history(limit: int = 50):
+    """Get self-healing history."""
+    from backend.self_healing import get_self_healing_history
+    return {"history": get_self_healing_history(limit)}
+
+
+@app.get("/self-healing/learnings")
+async def get_error_learnings(limit: int = 50):
+    """Get error-related learnings."""
+    from backend.self_healing import get_error_learnings
+    return {"learnings": get_error_learnings(limit)}
+
+
+@app.post("/self-healing/analyze/{session_id}")
+async def analyze_session_errors(session_id: str):
+    """Manually trigger self-healing analysis for a session."""
+    from backend.self_healing import run_self_healing_loop
+    
+    # Get tool logs for session
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM tool_call_logs
+            WHERE session_id = %s
+            ORDER BY created_at ASC
+            """,
+            (session_id,),
+        )
+        tool_logs = [dict(r) for r in cur.fetchall()]
+    
+    # Get session context
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT task_description, issue_category
+            FROM session_history
+            WHERE id = %s
+            """,
+            (session_id,),
+        )
+        session = cur.fetchone()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    result = run_self_healing_loop(
+        session_id=session_id,
+        tool_logs=tool_logs,
+        session_context=dict(session),
+    )
+    
+    return result

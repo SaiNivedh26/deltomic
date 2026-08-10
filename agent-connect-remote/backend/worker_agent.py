@@ -14,7 +14,11 @@ from langchain_core.utils.uuid import uuid7
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.access_control import access_control
-from backend.config import AGENT_MODEL, ALLOWED_COMMANDS, GROQ_API_KEY, GROQ_MODEL, GROQ_MAX_TOKENS
+from backend.config import (
+    AGENT_MODEL, ALLOWED_COMMANDS,
+    BEDROCK_MODEL, BEDROCK_REGION, BEDROCK_API_KEY,
+    AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY,
+)
 from backend.tenant_service import (
     get_or_create_tenant,
     create_session,
@@ -28,6 +32,13 @@ from backend.tool_config import (
     needs_escalation,
     resolve_task_profile,
 )
+from backend.trace_service import (
+    store_tool_execution_trace,
+    store_agent_planning_trace,
+    store_conversation_turn,
+)
+from backend.session_lifecycle import finalize_session, broadcast_agent_event
+from backend.critique_agent import critique_execution_plan, is_plan_approved, expand_allowlist_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +53,11 @@ _current_context: dict[str, str | None] = {
     "profile_name": None,
     "escalated": False,
     "task_id": None,
+    "task_description": None,
 }
+
+_command_history: list[dict] = []
+_command_in_progress: bool = False
 
 
 def _push_event(event: dict):
@@ -51,9 +66,34 @@ def _push_event(event: dict):
         _task_queues[task_id].put_nowait(event)
 
 
+def _get_model_name():
+    return BEDROCK_MODEL
+
+
 @tool
 def list_available_commands() -> str:
     """List all commands currently allowed for this session."""
+    grant_id = _current_context.get("grant_id")
+    if grant_id:
+        try:
+            from backend.db import get_cursor
+            import json
+            
+            with get_cursor() as cur:
+                cur.execute(
+                    "SELECT allowed_commands FROM support_access_grants WHERE id = %s",
+                    (grant_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    cmds = row["allowed_commands"]
+                    if isinstance(cmds, str):
+                        cmds = json.loads(cmds)
+                    return "\n".join(cmds)
+        except Exception as e:
+            logger.error(f"Failed to get grant commands: {e}")
+    
+    # Fallback to profile-based allowlist
     profile = _current_context.get("profile_name")
     escalated = _current_context.get("escalated", False)
     commands = build_dynamic_allowlist(profile or "diagnostic", escalated)
@@ -65,95 +105,132 @@ async def run_command(command: str) -> str:
     """Execute an allowed command on the remote customer machine.
 
     Args:
-        command: The command to execute (must be in the allowlist)
+        command: The command to execute
     """
-    start_time = time.time()
-    grant_id = _current_context.get("grant_id")
-    agent_id = _current_context.get("agent_id")
-    tenant_id = _current_context.get("tenant_id")
-    session_id = _current_context.get("session_id")
-
-    if not grant_id or not agent_id:
-        return "Error: No active session context"
-
-    if is_destructive(command):
-        _current_context["escalated"] = True
-        _push_event({"type": "approval_required", "command": command, "task_id": _current_context.get("task_id")})
-        return f"ESCALATION_REQUIRED: Command '{command}' is destructive and requires explicit customer approval. Ask the customer if they approve this command before proceeding."
-
-    _push_event({"type": "command_start", "command": command, "task_id": _current_context.get("task_id")})
+    global _command_in_progress
+    
+    if _command_in_progress:
+        return "BUSY: Another command is currently executing. Please wait for it to complete before running the next command. Execute commands ONE AT A TIME."
+    
+    _command_in_progress = True
     
     try:
-        result = await access_control.execute_command(
-            grant_id=grant_id,
-            command=command,
-            executed_by=agent_id,
-        )
+        start_time = time.time()
+        grant_id = _current_context.get("grant_id")
+        agent_id = _current_context.get("agent_id")
+        tenant_id = _current_context.get("tenant_id")
+        session_id = _current_context.get("session_id")
+        model_used = _get_model_name()
 
-        duration_ms = int((time.time() - start_time) * 1000)
+        if not grant_id or not agent_id:
+            return "Error: No active session context"
 
-        if result["status"] == "Success":
-            output = result["stdout"].strip()
-            _push_event({"type": "command_complete", "command": command, "output": output, "status": "success", "duration_ms": duration_ms, "task_id": _current_context.get("task_id")})
+        normalized_cmd = command.strip()
+        for prev in _command_history:
+            if prev["command"].strip() == normalized_cmd:
+                return f"DUPLICATE_COMMAND: You already ran this command. Previous output: {prev['output'][:200]}. Use a different command or analyze the previous result."
 
-            log_tool_call(
-                tool_name="run_command",
-                tool_args={"command": command},
-                tool_result=output[:2000] if output else "(no output)",
-                status="success",
-                duration_ms=duration_ms,
-                model_used=GROQ_MODEL,
-                session_id=session_id,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
+        if is_destructive(command):
+            _current_context["escalated"] = True
+            _push_event({"type": "approval_required", "command": command, "task_id": _current_context.get("task_id")})
+            return f"ESCALATION_REQUIRED: Command '{command}' is destructive and requires explicit customer approval."
+
+        _push_event({"type": "command_start", "command": command, "task_id": _current_context.get("task_id")})
+
+        broadcast_agent_event(agent_id, {
+            "type": "command_start",
+            "command": command,
+            "session_id": session_id,
+            "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        })
+
+        try:
+            result = await access_control.execute_command(
                 grant_id=grant_id,
+                command=command,
+                executed_by=agent_id,
             )
 
-            return output if output else "(no output)"
-        else:
-            error_msg = result["stderr"] or result["status"]
-            _push_event({"type": "command_complete", "command": command, "output": error_msg, "status": "failed", "duration_ms": duration_ms, "task_id": _current_context.get("task_id")})
-            log_tool_call(
-                tool_name="run_command",
-                tool_args={"command": command},
-                tool_result=error_msg,
-                status="failed",
-                duration_ms=duration_ms,
-                model_used=GROQ_MODEL,
-                session_id=session_id,
-                tenant_id=tenant_id,
-                agent_id=agent_id,
-                grant_id=grant_id,
-            )
-            return f"Command failed: {error_msg}"
-    except PermissionError as e:
-        log_tool_call(
-            tool_name="run_command",
-            tool_args={"command": command},
-            tool_result=str(e),
-            status="permission_denied",
-            duration_ms=int((time.time() - start_time) * 1000),
-            model_used=GROQ_MODEL,
-            session_id=session_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            grant_id=grant_id,
-        )
-        return f"Permission denied: {e}"
-    except Exception as e:
-        log_tool_call(
-            tool_name="run_command",
-            tool_args={"command": command},
-            tool_result=str(e),
-            status="error",
-            duration_ms=int((time.time() - start_time) * 1000),
-            model_used=GROQ_MODEL,
-            session_id=session_id,
-            tenant_id=tenant_id,
-            agent_id=agent_id,
-            grant_id=grant_id,
-        )
-        return f"Error: {e}"
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            if result["status"] == "Success":
+                output = result["stdout"].strip()
+                
+                _command_history.append({
+                    "command": normalized_cmd,
+                    "output": output[:500] if output else "(no output)",
+                    "status": "success",
+                    "timestamp": time.time(),
+                })
+                
+                _push_event({"type": "command_complete", "command": command, "output": output, "status": "success", "duration_ms": duration_ms, "task_id": _current_context.get("task_id")})
+
+                log_tool_call(
+                    tool_name="run_command",
+                    tool_args={"command": command},
+                    tool_result=output[:2000] if output else "(no output)",
+                    status="success",
+                    duration_ms=duration_ms,
+                    model_used=model_used,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    grant_id=grant_id,
+                )
+
+                store_tool_execution_trace(
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    tool_name="run_command",
+                    tool_args={"command": command},
+                    tool_result=output[:2000] if output else "(no output)",
+                    status="success",
+                    duration_ms=duration_ms,
+                    model_used=model_used,
+                )
+
+                broadcast_agent_event(agent_id, {
+                    "type": "command_complete",
+                    "command": command,
+                    "status": "success",
+                    "output_preview": output[:200] if output else "",
+                    "duration_ms": duration_ms,
+                    "session_id": session_id,
+                    "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+                })
+
+                return output if output else "(no output)"
+            else:
+                error_msg = result["stderr"] or result["status"]
+                
+                _command_history.append({
+                    "command": normalized_cmd,
+                    "output": error_msg[:500],
+                    "status": "failed",
+                    "timestamp": time.time(),
+                })
+                
+                _push_event({"type": "command_complete", "command": command, "output": error_msg, "status": "failed", "duration_ms": duration_ms, "task_id": _current_context.get("task_id")})
+                log_tool_call(
+                    tool_name="run_command",
+                    tool_args={"command": command},
+                    tool_result=error_msg,
+                    status="failed",
+                    duration_ms=duration_ms,
+                    model_used=model_used,
+                    session_id=session_id,
+                    tenant_id=tenant_id,
+                    agent_id=agent_id,
+                    grant_id=grant_id,
+                )
+                return f"Command failed: {error_msg}"
+        except PermissionError as e:
+            return f"Permission denied: {e}"
+        except Exception as e:
+            return f"Error: {e}"
+    finally:
+        _command_in_progress = False
 
 
 @tool
@@ -166,8 +243,8 @@ async def approve_and_run_destructive(command: str) -> str:
     start_time = time.time()
     grant_id = _current_context.get("grant_id")
     agent_id = _current_context.get("agent_id")
-    tenant_id = _current_context.get("tenant_id")
     session_id = _current_context.get("session_id")
+    model_used = _get_model_name()
 
     if not grant_id or not agent_id:
         return "Error: No active session context"
@@ -191,9 +268,9 @@ async def approve_and_run_destructive(command: str) -> str:
                 tool_result=output[:2000] if output else "(no output)",
                 status="success",
                 duration_ms=duration_ms,
-                model_used=GROQ_MODEL,
+                model_used=model_used,
                 session_id=session_id,
-                tenant_id=tenant_id,
+                tenant_id=_current_context.get("tenant_id"),
                 agent_id=agent_id,
                 grant_id=grant_id,
             )
@@ -212,10 +289,106 @@ def get_previous_sessions() -> str:
     tenant_id = _current_context.get("tenant_id")
     if not tenant_id:
         return "No tenant context available"
-    
+
     from backend.tenant_service import get_previous_context
     context = get_previous_context(tenant_id)
     return context if context else "No previous sessions found for this customer"
+
+
+@tool
+def propose_execution_plan(commands: list[str], reasoning: str) -> str:
+    """Propose an execution plan for security review BEFORE running commands.
+
+    Args:
+        commands: List of commands you plan to execute
+        reasoning: Brief explanation of why these commands are needed
+    """
+    profile = _current_context.get("profile_name", "diagnostic")
+    current_allowlist = build_dynamic_allowlist(profile, _current_context.get("escalated", False))
+    task_description = _current_context.get("task_description", "")
+    grant_id = _current_context.get("grant_id")
+
+    broadcast_agent_event(
+        _current_context.get("agent_id", ""),
+        {
+            "type": "plan_proposed",
+            "commands": commands,
+            "reasoning": reasoning,
+            "profile": profile,
+            "session_id": _current_context.get("session_id"),
+        },
+    )
+
+    critique_result = critique_execution_plan(
+        task_description=task_description,
+        planned_commands=commands,
+        current_allowlist=current_allowlist,
+        task_profile=profile,
+    )
+
+    if is_plan_approved(critique_result):
+        approved = critique_result.get("approved_commands", commands)
+        expansion = expand_allowlist_if_needed(critique_result)
+
+        if expansion:
+            # Actually persist the allowlist expansion to the database
+            if grant_id:
+                try:
+                    from backend.db import get_cursor
+                    import json
+                    
+                    with get_cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT allowed_commands FROM support_access_grants WHERE id = %s
+                            """,
+                            (grant_id,),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            current_cmds = row["allowed_commands"]
+                            if isinstance(current_cmds, str):
+                                current_cmds = json.loads(current_cmds)
+                            
+                            # Add new commands
+                            for cmd in expansion:
+                                if cmd not in current_cmds:
+                                    current_cmds.append(cmd)
+                            
+                            cur.execute(
+                                """
+                                UPDATE support_access_grants 
+                                SET allowed_commands = %s, updated_at = now()
+                                WHERE id = %s
+                                """,
+                                (json.dumps(current_cmds), grant_id),
+                            )
+                            
+                            logger.info(f"Allowlist expanded for grant {grant_id}: added {expansion}")
+                except Exception as e:
+                    logger.error(f"Failed to expand allowlist: {e}")
+            
+            broadcast_agent_event(
+                _current_context.get("agent_id", ""),
+                {
+                    "type": "allowlist_expanded",
+                    "added_commands": expansion,
+                    "justification": (critique_result.get("allowlist_expansion") or {}).get("justification", ""),
+                },
+            )
+
+        return json.dumps({
+            "status": "approved",
+            "approved_commands": approved,
+            "critique": critique_result.get("critique", ""),
+            "risk_level": critique_result.get("risk_level", "unknown"),
+        })
+    else:
+        return json.dumps({
+            "status": "denied",
+            "denied_commands": critique_result.get("denied_commands", []),
+            "critique": critique_result.get("critique", ""),
+        })
 
 
 @tool
@@ -240,45 +413,71 @@ WORKER_TOOLS = [
     run_command,
     approve_and_run_destructive,
     get_previous_sessions,
+    propose_execution_plan,
     revoke_access,
 ]
 
-WORKER_SYSTEM_PROMPT = """You are a remote support execution agent. You receive tasks from a conversation agent (Gemini Live voice) and execute them on the customer's machine.
+WORKER_SYSTEM_PROMPT = """You are Deltomic, a senior remote support engineer. You are connected to a customer's machine and need to help them.
 
-Your role:
-1. Focus on the CURRENT TASK - this is your primary objective
-2. Analyze the task you've been given
-3. Plan your approach step by step
-4. Use run_command to execute commands on their machine
-5. Analyze the output and take appropriate action
-6. For destructive commands, use approve_and_run_destructive ONLY after the customer explicitly approves
-7. When done, use revoke_access to end the session
+CRITICAL EXECUTION RULES:
+1. Execute ONE command at a time. NEVER call multiple tools simultaneously.
+2. Wait for the result of each command before calling the next one.
+3. Keep track of what you've already executed - DO NOT repeat the same command.
+4. After each command, analyze the output and decide the next step.
+5. If a command fails, try a different approach - don't retry the same command.
+6. ONLY run commands relevant to the specific issue. Don't run generic diagnostic commands.
+
+HOW YOU WORK:
+1. You ALREADY KNOW the customer's issue from the task description. Do NOT ask them to explain it again.
+2. Start by acknowledging what you know about their issue and briefly state your approach.
+3. If the user tells you something specific (like "Docker installed via snap"), USE THAT INFORMATION.
+4. Execute ONE command, wait for result, interpret it, then decide next command.
+5. Summarize what you found and what you did.
+
+EXAMPLE BEHAVIOR (good):
+User: "My container keeps restarting"
+"I see you're having issues with a container restarting. Let me check what's happening with Docker."
+[runs: docker ps -a]
+[waits for result]
+"I can see the container is in a restart loop. Let me check the logs to understand why."
+[runs: docker logs <container-name> --tail 50]
+[waits for result]
+"The logs show the application is crashing due to a missing environment variable. Let me check the docker-compose file."
+
+EXAMPLE BEHAVIOR (bad - DO NOT DO THIS):
+User: "My container keeps restarting"
+[runs: whoami, id, groups, sudo -n true, docker ps] ← WRONG! Irrelevant commands!
+
+RULES:
+- NEVER ask the customer to re-explain their issue - you already have the task context
+- ALWAYS execute commands ONE AT A TIME - wait for each result before proceeding
+- NEVER repeat a command you've already run - track your execution history
+- ONLY run commands relevant to the issue - don't run generic diagnostics
+- If the user provides specific information (like how something was installed), use it
+- Always explain what you're doing and why BEFORE running each command
+- Be proactive - don't wait for instructions, take initiative
+- For destructive commands, explain consequences and ask for approval
+- Keep explanations concise but informative
+- The working directory is /home/ubuntu
 
 Available tools:
-- run_command(command): Execute a command on their machine
-- approve_and_run_destructive(command): Execute a destructive command (only after customer approval)
-- list_available_commands(): See all allowed commands
-- get_previous_sessions(): Fetch previous session history (call this ONLY if you need context about past interactions)
-- revoke_access(reason): End the session when done
-
-Rules:
-- PRIORITIZE the current task above all else
-- Be thorough and methodical
-- Execute commands, analyze output, and complete the task autonomously
-- Default to read-only diagnostic commands first
-- Only escalate to write/destructive commands when necessary
-- Always explain what you're doing and why
-- If you need historical context, call get_previous_sessions() - but don't let it distract from the current task
-- The working directory is /home/ubuntu"""
+- run_command(command): Execute a command on their machine (ONE AT A TIME!)
+- propose_execution_plan(commands, reasoning): Submit a plan for review (optional, use for complex multi-step tasks)
+- list_available_commands(): See allowed commands
+- get_previous_sessions(): Check past session history
+- revoke_access(reason): End the session when done"""
 
 
-def _get_groq_agent():
-    from langchain_groq import ChatGroq
+def _get_bedrock_agent():
+    from langchain_aws import ChatBedrockConverse
 
-    model = ChatGroq(
-        model=GROQ_MODEL,
+    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = BEDROCK_API_KEY
+
+    model = ChatBedrockConverse(
+        model=BEDROCK_MODEL,
+        region_name=BEDROCK_REGION,
         temperature=0,
-        max_tokens=GROQ_MAX_TOKENS,
+        max_tokens=4096,
     )
 
     return create_agent(
@@ -289,15 +488,15 @@ def _get_groq_agent():
     )
 
 
-_groq_agent_instance = None
+_bedrock_agent_instance = None
 
 
-def _get_groq_agent_lazy():
-    global _groq_agent_instance
-    if _groq_agent_instance is None:
-        _groq_agent_instance = _get_groq_agent()
-        logger.info(f"Groq Execution Agent: Initialized with {GROQ_MODEL}")
-    return _groq_agent_instance
+def _get_bedrock_agent_lazy():
+    global _bedrock_agent_instance
+    if _bedrock_agent_instance is None:
+        _bedrock_agent_instance = _get_bedrock_agent()
+        logger.info(f"Bedrock Execution Agent: Initialized with {BEDROCK_MODEL}")
+    return _bedrock_agent_instance
 
 
 async def worker_chat(
@@ -308,8 +507,9 @@ async def worker_chat(
     task_context: str = "",
     thread_id: str | None = None,
 ) -> str:
+    _command_history.clear()
     thread_id = thread_id or str(uuid7())
-    agent = _get_groq_agent_lazy()
+    agent = _get_bedrock_agent_lazy()
 
     tenant = None
     tenant_id = None
@@ -322,7 +522,7 @@ async def worker_chat(
         session = create_session(
             tenant_id=tenant_id,
             agent_id=agent_id,
-            grant_id=grant_id,
+            grant_id=grant_id if grant_id else None,
             task_description=task_context or message[:200],
         )
         session_id = session["id"]
@@ -343,6 +543,7 @@ async def worker_chat(
     _current_context["session_id"] = session_id
     _current_context["profile_name"] = profile_name
     _current_context["escalated"] = False
+    _current_context["task_description"] = task_context or message[:200]
 
     try:
         result = await agent.ainvoke(
@@ -360,13 +561,17 @@ async def worker_chat(
                         if tc["name"] == "run_command":
                             commands.append(tc["args"].get("command", ""))
 
-            end_session(
+            await finalize_session(
                 session_id=session_id,
+                agent_id=agent_id,
+                tenant_id=tenant_id,
                 summary=response[:500] if response else "",
                 issue_category=profile_name,
                 resolution_status="resolved",
                 commands_executed=commands,
                 tool_calls_count=len(commands),
+                langgraph_messages=result["messages"],
+                model_used=_get_model_name(),
             )
 
         return response
@@ -377,6 +582,7 @@ async def worker_chat(
         _current_context["session_id"] = None
         _current_context["profile_name"] = None
         _current_context["escalated"] = False
+        _current_context["task_description"] = None
 
 
 async def execute_task_with_groq(
@@ -385,22 +591,18 @@ async def execute_task_with_groq(
     agent_id: str,
     email: str = "",
 ) -> dict:
-    """Execute a task using Groq agent for planning and command execution.
-    
-    Returns:
-        dict with summary and list of commands executed
-    """
+    _command_history.clear()
     thread_id = str(uuid7())
-    agent = _get_groq_agent_lazy()
-    
+    agent = _get_bedrock_agent_lazy()
+
     tenant = None
     tenant_id = None
     session_id = None
-    
+
     if email:
         tenant = get_or_create_tenant(email)
         tenant_id = tenant["id"]
-        
+
         session = create_session(
             tenant_id=tenant_id,
             agent_id=agent_id,
@@ -408,26 +610,27 @@ async def execute_task_with_groq(
             task_description=task_description,
         )
         session_id = session["id"]
-    
+
     profile_name = resolve_task_profile(task_description)
-    
+
     _current_context["grant_id"] = grant_id
     _current_context["agent_id"] = agent_id
     _current_context["tenant_id"] = tenant_id
     _current_context["session_id"] = session_id
     _current_context["profile_name"] = profile_name
     _current_context["escalated"] = False
-    
+    _current_context["task_description"] = task_description
+
     commands_executed = []
-    
+
     try:
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=task_description)]},
             {"configurable": {"thread_id": thread_id}},
         )
-        
+
         response = result["messages"][-1].content
-        
+
         for msg in result["messages"]:
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
@@ -437,7 +640,7 @@ async def execute_task_with_groq(
                             "status": "success",
                             "output": "",
                         })
-        
+
         if session_id:
             end_session(
                 session_id=session_id,
@@ -447,7 +650,7 @@ async def execute_task_with_groq(
                 commands_executed=[c["command"] for c in commands_executed],
                 tool_calls_count=len(commands_executed),
             )
-        
+
         return {
             "summary": response if response else "Task completed",
             "commands": commands_executed,
@@ -460,6 +663,7 @@ async def execute_task_with_groq(
         _current_context["session_id"] = None
         _current_context["profile_name"] = None
         _current_context["escalated"] = False
+        _current_context["task_description"] = None
 
 
 async def execute_task_streaming(
@@ -468,26 +672,21 @@ async def execute_task_streaming(
     agent_id: str,
     email: str = "",
 ) -> tuple[str, AsyncGenerator[str, None]]:
-    """Execute a task with streaming command updates via SSE.
-    
-    Returns:
-        tuple of (task_id, async generator of SSE events)
-    """
     task_id = str(uuid7())
     queue: asyncio.Queue = asyncio.Queue()
     _task_queues[task_id] = queue
-    
+
     thread_id = str(uuid7())
-    agent = _get_groq_agent_lazy()
-    
+    agent = _get_bedrock_agent_lazy()
+
     tenant = None
     tenant_id = None
     session_id = None
-    
+
     if email:
         tenant = get_or_create_tenant(email)
         tenant_id = tenant["id"]
-        
+
         session = create_session(
             tenant_id=tenant_id,
             agent_id=agent_id,
@@ -495,10 +694,68 @@ async def execute_task_streaming(
             task_description=task_description,
         )
         session_id = session["id"]
-    
+
     profile_name = resolve_task_profile(task_description)
+
+    # Auto-expand allowlist based on task context
+    task_lower = task_description.lower()
+    auto_expand_commands = []
     
+    if any(kw in task_lower for kw in ["docker", "container", "kubernetes", "k8s", "pod"]):
+        auto_expand_commands.extend(["docker", "snap", "snap run", "systemctl", "journalctl"])
+    
+    if any(kw in task_lower for kw in ["network", "dns", "firewall", "port", "connect"]):
+        auto_expand_commands.extend(["netstat", "ss", "ping", "ip", "ifconfig", "curl", "wget"])
+    
+    if any(kw in task_lower for kw in ["install", "package", "apt", "snap", "dpkg"]):
+        auto_expand_commands.extend(["apt", "dpkg", "snap", "python3", "pip3"])
+    
+    if any(kw in task_lower for kw in ["service", "systemd", "restart", "start", "stop"]):
+        auto_expand_commands.extend(["systemctl", "service", "journalctl"])
+    
+    if auto_expand_commands and grant_id:
+        try:
+            from backend.db import get_cursor
+            
+            with get_cursor() as cur:
+                cur.execute(
+                    "SELECT allowed_commands FROM support_access_grants WHERE id = %s",
+                    (grant_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    current_cmds = row["allowed_commands"]
+                    if isinstance(current_cmds, str):
+                        current_cmds = json.loads(current_cmds)
+                    
+                    added = []
+                    for cmd in auto_expand_commands:
+                        if cmd not in current_cmds:
+                            current_cmds.append(cmd)
+                            added.append(cmd)
+                    
+                    if added:
+                        cur.execute(
+                            """
+                            UPDATE support_access_grants 
+                            SET allowed_commands = %s, updated_at = now()
+                            WHERE id = %s
+                            """,
+                            (json.dumps(current_cmds), grant_id),
+                        )
+                        logger.info(f"Auto-expanded allowlist for grant {grant_id}: added {added}")
+                        
+                        broadcast_agent_event(agent_id, {
+                            "type": "allowlist_expanded",
+                            "added_commands": added,
+                            "justification": f"Task context requires: {task_description[:100]}",
+                        })
+        except Exception as e:
+            logger.error(f"Failed to auto-expand allowlist: {e}")
+
     async def run_agent():
+        _command_history.clear()
+        
         _current_context["grant_id"] = grant_id
         _current_context["agent_id"] = agent_id
         _current_context["tenant_id"] = tenant_id
@@ -506,34 +763,55 @@ async def execute_task_streaming(
         _current_context["profile_name"] = profile_name
         _current_context["escalated"] = False
         _current_context["task_id"] = task_id
-        
+        _current_context["task_description"] = task_description
+
         try:
             _push_event({"type": "task_start", "task_id": task_id, "description": task_description})
-            
+
+            broadcast_agent_event(agent_id, {
+                "type": "task_start",
+                "task_id": task_id,
+                "description": task_description,
+                "session_id": session_id,
+                "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+            })
+
             result = await agent.ainvoke(
                 {"messages": [HumanMessage(content=task_description)]},
                 {"configurable": {"thread_id": thread_id}},
             )
-            
+
             response = result["messages"][-1].content
-            
+
             commands_executed = []
             for msg in result["messages"]:
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
                     for tc in msg.tool_calls:
                         if tc["name"] in ("run_command", "approve_and_run_destructive"):
                             commands_executed.append(tc["args"].get("command", ""))
-            
+
             if session_id:
-                end_session(
+                await finalize_session(
                     session_id=session_id,
+                    agent_id=agent_id,
+                    tenant_id=tenant_id,
                     summary=response[:500] if response else "",
                     issue_category=profile_name,
                     resolution_status="resolved",
                     commands_executed=commands_executed,
                     tool_calls_count=len(commands_executed),
+                    langgraph_messages=result["messages"],
+                    model_used=_get_model_name(),
                 )
-            
+
+            broadcast_agent_event(agent_id, {
+                "type": "task_complete",
+                "task_id": task_id,
+                "summary": response or "Task completed",
+                "session_id": session_id,
+                "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+            })
+
             _push_event({"type": "task_complete", "task_id": task_id, "summary": response or "Task completed"})
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
@@ -546,9 +824,10 @@ async def execute_task_streaming(
             _current_context["profile_name"] = None
             _current_context["escalated"] = False
             _current_context["task_id"] = None
-    
+            _current_context["task_description"] = None
+
     asyncio.create_task(run_agent())
-    
+
     async def event_stream():
         while True:
             try:
@@ -558,14 +837,13 @@ async def execute_task_streaming(
                     break
             except asyncio.TimeoutError:
                 yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-        
+
         _task_queues.pop(task_id, None)
-    
+
     return task_id, event_stream()
 
 
 def approve_command(task_id: str, approved: bool):
-    """Approve or deny a destructive command."""
     if task_id in _pending_approvals:
         _pending_approvals[task_id].set_result(approved)
     return True

@@ -31,6 +31,10 @@ GROQ_MODEL = get_env("GROQ_MODEL", "qwen/qwen3.6-27b")
 GROQ_MAX_TOKENS = int(get_env("GROQ_MAX_TOKENS", "4096"))
 GROQ_MAX_RETRIES = int(get_env("GROQ_MAX_RETRIES", "3"))
 
+BEDROCK_MODEL = get_env("BEDROCK_MODEL", "qwen.qwen3-coder-next")
+BEDROCK_REGION = get_env("BEDROCK_REGION", "us-east-1")
+BEDROCK_API_KEY = get_env("BEDROCK_API_KEY", "")
+
 LANGSMITH_TRACING = os.getenv("LANGSMITH_TRACING", "true").lower() == "true"
 LANGSMITH_API_KEY = get_env("LANGSMITH_API_KEY", "")
 LANGSMITH_PROJECT = get_env("LANGSMITH_PROJECT", "agent-connect-remote")
@@ -74,6 +78,28 @@ ALLOWED_COMMANDS = [
     "sed",
     "awk",
     "touch",
+    "docker",
+    "snap",
+    "systemctl",
+    "service",
+    "curl",
+    "wget",
+    "journalctl",
+    "ps",
+    "top",
+    "htop",
+    "netstat",
+    "ss",
+    "ping",
+    "ip",
+    "ifconfig",
+    "env",
+    "export",
+    "which",
+    "whereis",
+    "dpkg",
+    "apt",
+    "snap run",
 ]
 
 DESTRUCTIVE_PATTERNS = [

@@ -212,6 +212,9 @@ class AccessControlService:
                     exit_code = invocation.get("ResponseCode", -1)
                     stdout = invocation.get("StandardOutputContent", "")
                     stderr = invocation.get("StandardErrorContent", "")
+                    
+                    stdout = stdout.replace("\x00", "") if stdout else ""
+                    stderr = stderr.replace("\x00", "") if stderr else ""
 
                     with get_cursor() as cur:
                         cur.execute(

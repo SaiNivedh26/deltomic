@@ -378,6 +378,20 @@ async def on_instance_connected(customer_id: str, managed_node_id: str, to_email
         "started_at": datetime.utcnow().isoformat(),
     }
 
+    try:
+        from backend.session_lifecycle import broadcast_agent_event
+        broadcast_agent_event(agent_id, {
+            "type": "agent_dispatched",
+            "agent_id": agent_id,
+            "customer_id": customer_id,
+            "email": to_email,
+            "task_context": task_context,
+            "meet_url": meet_url,
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"Could not broadcast dispatch event: {e}")
+
     logger.info(f"Session created: {agent_id} -> grant {grant_id}, node {managed_node_id}, bot {recall_result.get('bot_id')}")
     return {"agent_id": agent_id, "grant_id": grant_id, "meet_url": meet_url, "bot_id": recall_result.get("bot_id")}
 
@@ -458,12 +472,23 @@ def end_session(agent_id: str):
     session = _active_sessions.pop(agent_id, None)
     if session:
         try:
-            access_control.revoke_access(
-                grant_id=session["grant_id"],
-                revoked_by="session-ended",
-                reason="Meeting ended",
-            )
-            logger.info(f"Session ended: {agent_id}, grant revoked")
+            from backend.session_lifecycle import cleanup_meet_session
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(cleanup_meet_session(agent_id, session))
+            else:
+                loop.run_until_complete(cleanup_meet_session(agent_id, session))
+            logger.info(f"Session ended: {agent_id}, cleanup initiated")
         except Exception as e:
-            logger.error(f"Error revoking grant on session end: {e}")
+            logger.error(f"Error during session cleanup: {e}")
+            try:
+                access_control.revoke_access(
+                    grant_id=session["grant_id"],
+                    revoked_by="session-ended",
+                    reason="Meeting ended",
+                )
+                logger.info(f"Session ended: {agent_id}, grant revoked (fallback)")
+            except Exception as e2:
+                logger.error(f"Fallback revoke also failed: {e2}")
     return session

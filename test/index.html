@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Gemini Voice Test</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #0a0a0f;
+  color: #e0e0e0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+
+h1 {
+  font-size: 1.5em;
+  margin-bottom: 8px;
+  color: #667eea;
+}
+
+.status {
+  font-size: 0.9em;
+  color: #888;
+  margin-bottom: 32px;
+}
+
+.mic-btn {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  border: 3px solid #374151;
+  background: #1a1a2e;
+  color: #9ca3af;
+  font-size: 2.5em;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-bottom: 24px;
+}
+
+.mic-btn:hover {
+  border-color: #667eea;
+  background: #1e1e3a;
+}
+
+.mic-btn.active {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+  50% { box-shadow: 0 0 0 20px rgba(16, 185, 129, 0); }
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 32px;
+}
+
+.chip {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.75em;
+  font-weight: 500;
+}
+
+.chip.off { background: #374151; color: #9ca3af; }
+.chip.on { background: #10b981; color: white; }
+.chip.connecting { background: #f59e0b; color: white; }
+
+.transcript {
+  width: 100%;
+  max-width: 600px;
+  min-height: 300px;
+  background: #151520;
+  border: 1px solid #2a2a3a;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+.msg {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  line-height: 1.5;
+  font-size: 0.95em;
+}
+
+.msg.user {
+  background: rgba(245, 158, 11, 0.1);
+  border-left: 3px solid #f59e0b;
+  color: #fbbf24;
+}
+
+.msg.assistant {
+  background: rgba(102, 126, 234, 0.1);
+  border-left: 3px solid #667eea;
+  color: #a5b4fc;
+}
+
+.msg.system {
+  background: rgba(107, 114, 128, 0.1);
+  color: #9ca3af;
+  font-style: italic;
+  font-size: 0.85em;
+}
+
+.log {
+  width: 100%;
+  max-width: 600px;
+  margin-top: 16px;
+  font-family: monospace;
+  font-size: 0.75em;
+  color: #6b7280;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.log div {
+  padding: 2px 0;
+}
+</style>
+</head>
+<body>
+
+<h1>Gemini Voice Test</h1>
+<div class="status" id="status">Press the mic button to start</div>
+
+<button class="mic-btn" id="micBtn" onclick="toggleMic()">🎤</button>
+
+<div class="chips">
+  <span class="chip off" id="geminiChip">Gemini: Off</span>
+  <span class="chip off" id="micChip">Mic: Off</span>
+  <span class="chip off" id="audioChip">Audio: Off</span>
+</div>
+
+<div class="transcript" id="transcript"></div>
+<div class="log" id="log"></div>
+
+<script>
+let ws = null;
+let audioContext = null;
+let mediaStream = null;
+let workletNode = null;
+let playerContext = null;
+let playerWorklet = null;
+let isConnected = false;
+let isListening = false;
+
+const transcriptEl = document.getElementById("transcript");
+const logEl = document.getElementById("log");
+const statusEl = document.getElementById("status");
+const micBtn = document.getElementById("micBtn");
+const geminiChip = document.getElementById("geminiChip");
+const micChip = document.getElementById("micChip");
+const audioChip = document.getElementById("audioChip");
+
+function log(msg) {
+  const div = document.createElement("div");
+  div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+}
+
+function setChip(el, state, label) {
+  el.className = `chip ${state}`;
+  el.textContent = label;
+}
+
+function addMsg(text, cls) {
+  const div = document.createElement("div");
+  div.className = `msg ${cls}`;
+  div.textContent = text;
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function updateLastMsg(text, cls) {
+  const msgs = transcriptEl.querySelectorAll(`.msg.${cls}`);
+  if (msgs.length > 0) {
+    msgs[msgs.length - 1].textContent = text;
+  } else {
+    addMsg(text, cls);
+  }
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function convertToPCM16(float32Array) {
+  const int16 = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16[i] = s * 0x7fff;
+  }
+  return int16.buffer;
+}
+
+async function initPlayer() {
+  if (playerContext) return;
+  playerContext = new AudioContext({ sampleRate: 24000 });
+  await playerContext.audioWorklet.addModule("../static/audio-processors/playback.worklet.js");
+  playerWorklet = new AudioWorkletNode(playerContext, "pcm-processor");
+  playerWorklet.connect(playerContext.destination);
+  setChip(audioChip, "on", "Audio: On");
+  log("Audio player initialized");
+}
+
+async function playAudio(base64Audio) {
+  if (!playerWorklet) await initPlayer();
+  if (playerContext.state === "suspended") await playerContext.resume();
+  const binary = atob(base64Audio);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const int16 = new Int16Array(bytes.buffer);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+  playerWorklet.port.postMessage(float32);
+}
+
+async function startMic() {
+  try {
+    log("Requesting microphone access...");
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
+    log("Microphone access granted");
+    
+    audioContext = new AudioContext({ sampleRate: 16000 });
+    await audioContext.audioWorklet.addModule("../static/audio-processors/capture.worklet.js");
+    workletNode = new AudioWorkletNode(audioContext, "audio-capture-processor");
+    
+    workletNode.port.onmessage = (event) => {
+      if (event.data.type === "audio") {
+        const pcm16 = convertToPCM16(event.data.data);
+        const base64 = arrayBufferToBase64(pcm16);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            realtimeInput: { audio: { mimeType: "audio/pcm", data: base64 } },
+          }));
+        }
+      }
+    };
+    
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    source.connect(workletNode);
+    
+    setChip(micChip, "on", "Mic: Streaming");
+    log("Microphone streaming started");
+    isListening = true;
+  } catch (e) {
+    log("Microphone error: " + e.message);
+    setChip(micChip, "off", "Mic: Error");
+  }
+}
+
+function stopMic() {
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+  workletNode = null;
+  setChip(micChip, "off", "Mic: Off");
+  isListening = false;
+  log("Microphone stopped");
+}
+
+async function connectGemini() {
+  try {
+    log("Fetching Gemini token...");
+    statusEl.textContent = "Fetching token...";
+    setChip(geminiChip, "connecting", "Gemini: Token...");
+    
+    const resp = await fetch("/api/token", { method: "POST" });
+    if (!resp.ok) throw new Error(`Token fetch failed: ${resp.status}`);
+    
+    const { token, model } = await resp.json();
+    log("Token received, model: " + model);
+    
+    statusEl.textContent = "Connecting to Gemini...";
+    setChip(geminiChip, "connecting", "Gemini: Connecting...");
+    
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${token}`;
+    ws = new WebSocket(wsUrl);
+    
+    ws.onopen = () => {
+      log("WebSocket connected, sending setup...");
+      ws.send(JSON.stringify({
+        setup: {
+          model: `models/${model}`,
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            temperature: 0.7,
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } },
+          },
+          systemInstruction: { parts: [{ text: "You are a helpful assistant. Respond concisely and naturally." }] },
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          realtimeInputConfig: {
+            automaticActivityDetection: { disabled: false, silenceDurationMs: 2000, prefixPaddingMs: 500 },
+            turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
+          },
+        },
+      }));
+    };
+    
+    ws.onmessage = async (event) => {
+      let jsonData;
+      if (event.data instanceof Blob) jsonData = await event.data.text();
+      else if (event.data instanceof ArrayBuffer) jsonData = new TextDecoder().decode(event.data);
+      else jsonData = event.data;
+      
+      let data;
+      try { data = JSON.parse(jsonData); } catch (e) { return; }
+      handleMessage(data);
+    };
+    
+    ws.onerror = (e) => {
+      log("WebSocket error");
+      setChip(geminiChip, "off", "Gemini: Error");
+      statusEl.textContent = "Connection error";
+    };
+    
+    ws.onclose = (e) => {
+      isConnected = false;
+      setChip(geminiChip, "off", "Gemini: Disconnected");
+      statusEl.textContent = `Disconnected (code=${e.code})`;
+      log(`WebSocket closed: code=${e.code}, reason=${e.reason}`);
+    };
+  } catch (e) {
+    log("Connection error: " + e.message);
+    setChip(geminiChip, "off", "Gemini: Error");
+    statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+function handleMessage(data) {
+  const sc = data?.serverContent;
+  
+  if (data?.setupComplete) {
+    isConnected = true;
+    setChip(geminiChip, "on", "Gemini: Connected");
+    statusEl.textContent = "Connected - press mic to talk";
+    log("Gemini setup complete");
+    addMsg("[Connected to Gemini]", "system");
+    return;
+  }
+  
+  const parts = sc?.modelTurn?.parts;
+  if (parts?.length) {
+    for (const part of parts) {
+      if (part.inlineData) {
+        playAudio(part.inlineData.data);
+      } else if (part.text) {
+        log("Model text: " + part.text);
+      }
+    }
+  }
+  
+  if (sc?.inputTranscription) {
+    const text = sc.inputTranscription.text || "";
+    if (text && !sc.inputTranscription.finished) {
+      addMsg(text, "user");
+    }
+  }
+  
+  if (sc?.outputTranscription) {
+    const text = sc.outputTranscription.text || "";
+    if (text) {
+      updateLastMsg(text, "assistant");
+    }
+  }
+  
+  if (sc?.interrupted) {
+    if (playerWorklet) playerWorklet.port.postMessage("interrupt");
+    log("Interrupted by user");
+  }
+}
+
+async function toggleMic() {
+  if (!isListening) {
+    log("Starting...");
+    micBtn.classList.add("active");
+    statusEl.textContent = "Starting...";
+    
+    if (!isConnected) {
+      await connectGemini();
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    await startMic();
+    statusEl.textContent = "Listening...";
+  } else {
+    log("Stopping...");
+    micBtn.classList.remove("active");
+    stopMic();
+    statusEl.textContent = "Stopped - press mic to talk again";
+  }
+}
+</script>
+</body>
+</html>

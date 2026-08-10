@@ -1,0 +1,1605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DELTOMIC — Agent Operations Dashboard</title>
+<style>
+:root {
+  --bg: #09090b; --surface: #111113; --surface2: #18181b; --border: #27272a;
+  --text: #fafafa; --text2: #a1a1aa; --text3: #71717a;
+  --accent: #6366f1; --accent2: #818cf8; --green: #22c55e; --red: #ef4444;
+  --yellow: #eab308; --cyan: #06b6d4; --orange: #f97316;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+.sidebar {
+  position: fixed; left: 0; top: 0; bottom: 0; width: 240px;
+  background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; z-index: 100;
+}
+.sidebar-logo { padding: 20px; border-bottom: 1px solid var(--border); }
+.sidebar-logo h1 { font-size: 14px; font-weight: 600; letter-spacing: 2px; color: var(--accent2); }
+.sidebar-logo p { font-size: 11px; color: var(--text3); margin-top: 4px; }
+.sidebar-nav { flex: 1; padding: 12px 8px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+  border-radius: 6px; cursor: pointer; color: var(--text3); font-size: 13px;
+  transition: all 0.15s; margin-bottom: 2px;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text2); }
+.nav-item.active { background: rgba(99,102,241,0.1); color: var(--accent2); }
+.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.nav-badge { margin-left: auto; background: var(--accent); color: white; font-size: 10px; padding: 1px 6px; border-radius: 10px; }
+
+.main { margin-left: 240px; min-height: 100vh; }
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(9,9,11,0.8); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px; display: flex; align-items: center; justify-content: space-between;
+}
+.topbar-title { font-size: 15px; font-weight: 500; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.topbar-status { font-size: 12px; color: var(--text3); display: flex; align-items: center; gap: 6px; }
+
+.content { padding: 24px; }
+.page { display: none; }
+.page.active { display: block; }
+
+.grid { display: grid; gap: 16px; }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-12 { grid-template-columns: repeat(12, 1fr); }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; overflow: hidden;
+}
+.card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.card-title { font-size: 13px; font-weight: 500; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.card-value { font-size: 28px; font-weight: 700; color: var(--text); }
+.card-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
+.card-accent { border-left: 3px solid var(--accent); }
+
+.agent-node {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px; position: relative;
+  transition: all 0.2s;
+}
+.agent-node:hover { border-color: var(--accent); transform: translateY(-1px); }
+.agent-node.active { border-color: var(--green); }
+.agent-node .agent-status { position: absolute; top: 12px; right: 12px; }
+.agent-node .agent-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.agent-node .agent-customer { font-size: 12px; color: var(--text3); }
+.agent-node .agent-task { font-size: 12px; color: var(--text2); margin-top: 8px; line-height: 1.4; }
+.agent-node .agent-meta { display: flex; gap: 12px; margin-top: 12px; font-size: 11px; color: var(--text3); }
+.agent-node .agent-meta span { display: flex; align-items: center; gap: 4px; }
+
+.status-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500;
+}
+.status-badge.active { background: rgba(34,197,94,0.1); color: var(--green); }
+.status-badge.completed { background: rgba(99,102,241,0.1); color: var(--accent2); }
+.status-badge.failed { background: rgba(239,68,68,0.1); color: var(--red); }
+.status-badge.pending { background: rgba(234,179,8,0.1); color: var(--yellow); }
+
+.trace-timeline { position: relative; padding-left: 24px; }
+.trace-timeline::before {
+  content: ''; position: absolute; left: 8px; top: 0; bottom: 0;
+  width: 2px; background: var(--border);
+}
+.trace-item {
+  position: relative; padding: 8px 0 16px; font-size: 12px;
+}
+.trace-item::before {
+  content: ''; position: absolute; left: -20px; top: 12px;
+  width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border);
+  background: var(--bg);
+}
+.trace-item.tool::before { border-color: var(--cyan); }
+.trace-item.llm::before { border-color: var(--accent); }
+.trace-item.message::before { border-color: var(--green); }
+.trace-item.error::before { border-color: var(--red); }
+.trace-item .trace-label { color: var(--text2); font-weight: 500; }
+.trace-item .trace-detail { color: var(--text3); margin-top: 2px; }
+.trace-item .trace-time { color: var(--text3); font-size: 11px; }
+
+.insight-row {
+  display: flex; align-items: center; gap: 12px; padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.insight-row:last-child { border-bottom: none; }
+.insight-bar-label { font-size: 13px; color: var(--text2); min-width: 140px; }
+.insight-bar-track { flex: 1; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.insight-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+.insight-bar-count { font-size: 12px; color: var(--text3); min-width: 30px; text-align: right; }
+
+.learning-card {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin-bottom: 8px;
+}
+.learning-card .learning-category { font-size: 11px; color: var(--accent2); font-weight: 600; text-transform: uppercase; }
+.learning-card .learning-text { font-size: 13px; color: var(--text2); margin-top: 6px; line-height: 1.5; }
+.learning-card .learning-meta { display: flex; gap: 12px; margin-top: 8px; font-size: 11px; color: var(--text3); }
+
+.log-stream {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px;
+  background: #000; border-radius: 6px; padding: 12px; max-height: 500px;
+  overflow-y: auto; line-height: 1.6;
+}
+.log-line { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid #111; }
+.log-line .log-time { color: var(--text3); min-width: 80px; font-size: 11px; }
+.log-line .log-agent { color: var(--cyan); min-width: 100px; font-size: 11px; }
+.log-line .log-msg { color: var(--text2); flex: 1; }
+.log-line.success .log-msg { color: var(--green); }
+.log-line.error .log-msg { color: var(--red); }
+.log-line.reasoning .log-msg { color: var(--yellow); font-style: italic; }
+.log-line.dispatch .log-msg { color: var(--accent2); font-weight: 600; }
+
+.step-feed { max-height: 600px; overflow-y: auto; }
+.step-item {
+  display: flex; gap: 12px; padding: 12px 16px;
+  border-left: 3px solid var(--border); margin-left: 8px;
+  transition: all 0.2s; cursor: pointer;
+}
+.step-item:hover { background: var(--surface2); }
+.step-item.active { border-left-color: var(--green); }
+.step-item.thinking { border-left-color: var(--yellow); }
+.step-item.executing { border-left-color: var(--cyan); }
+.step-item.error { border-left-color: var(--red); }
+.step-item.dispatch { border-left-color: var(--accent); }
+.step-icon {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+}
+.step-item.active .step-icon { background: rgba(34,197,94,0.15); color: var(--green); }
+.step-item.thinking .step-icon { background: rgba(234,179,8,0.15); color: var(--yellow); }
+.step-item.executing .step-icon { background: rgba(6,182,212,0.15); color: var(--cyan); }
+.step-item.error .step-icon { background: rgba(239,68,68,0.15); color: var(--red); }
+.step-item.dispatch .step-icon { background: rgba(99,102,241,0.15); color: var(--accent2); }
+.step-content { flex: 1; min-width: 0; }
+.step-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+.step-detail { font-size: 12px; color: var(--text3); line-height: 1.4; }
+.step-time { font-size: 11px; color: var(--text3); white-space: nowrap; }
+.step-expand {
+  display: none; margin-top: 8px; padding: 8px 12px;
+  background: var(--surface2); border-radius: 4px;
+  font-size: 12px; color: var(--text2); line-height: 1.5;
+  white-space: pre-wrap; word-break: break-word;
+}
+.step-item.expanded .step-expand { display: block; }
+
+.session-row {
+  display: grid; grid-template-columns: 1fr 1fr 120px 100px 80px;
+  gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border);
+  font-size: 13px; align-items: center; cursor: pointer; transition: background 0.1s;
+}
+.session-row:hover { background: var(--surface2); margin: 0 -20px; padding: 12px 20px; }
+.session-row .session-task { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-row .session-email { color: var(--text3); }
+.session-row .session-cat { color: var(--accent2); }
+.session-row .session-time { color: var(--text3); font-size: 12px; }
+
+.btn {
+  padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 500;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface2);
+  color: var(--text2); transition: all 0.15s;
+}
+.btn:hover { background: var(--border); color: var(--text); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent2); }
+
+.empty { text-align: center; padding: 40px; color: var(--text3); font-size: 13px; }
+
+.modal-overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  z-index: 200; align-items: center; justify-content: center;
+}
+.modal-overlay.show { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; width: 90%; max-width: 800px; max-height: 80vh;
+  overflow-y: auto; padding: 24px;
+}
+.modal-close { float: right; cursor: pointer; color: var(--text3); font-size: 20px; }
+.modal-close:hover { color: var(--text); }
+
+.healing-step {
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px;
+  background: var(--surface2); border-radius: 6px; margin-bottom: 8px;
+  border-left: 3px solid var(--accent);
+}
+.step-indicator {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+  color: white; display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; flex-shrink: 0;
+}
+.step-content { flex: 1; }
+.step-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.step-desc { font-size: 12px; color: var(--text3); line-height: 1.4; }
+
+.error-pattern {
+  display: flex; align-items: center; gap: 12px; padding: 10px;
+  background: var(--surface2); border-radius: 6px; margin-bottom: 6px;
+}
+.error-type {
+  font-size: 12px; font-weight: 600; color: var(--red);
+  min-width: 120px; text-transform: uppercase;
+}
+.error-count {
+  font-size: 12px; color: var(--text3); margin-left: auto;
+}
+
+.healing-record {
+  padding: 12px; background: var(--surface2); border-radius: 6px;
+  margin-bottom: 8px; border-left: 3px solid var(--green);
+}
+.healing-record-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px;
+}
+.healing-record-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.healing-record-meta { font-size: 11px; color: var(--text3); }
+.healing-record-details {
+  font-size: 12px; color: var(--text2); line-height: 1.5;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+}
+
+@media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+  .main { margin-left: 0; }
+  .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <h1>DELTOMIC</h1>
+    <p>Agent Operations</p>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-item active" onclick="showPage('overview')">
+      <span class="nav-dot"></span> Overview
+      <span class="nav-badge" id="navAgentCount">0</span>
+    </div>
+    <div class="nav-item" onclick="showPage('agents')">
+      <span class="nav-dot"></span> Live Agents
+    </div>
+    <div class="nav-item" onclick="showPage('traces')">
+      <span class="nav-dot"></span> Trace Explorer
+    </div>
+    <div class="nav-item" onclick="showPage('sessions')">
+      <span class="nav-dot"></span> Sessions
+    </div>
+    <div class="nav-item" onclick="showPage('insights')">
+      <span class="nav-dot"></span> Insights
+    </div>
+    <div class="nav-item" onclick="showPage('learnings')">
+      <span class="nav-dot"></span> Agent Learnings
+    </div>
+    <div class="nav-item" onclick="showPage('logs')">
+      <span class="nav-dot"></span> Log Stream
+    </div>
+    <div class="nav-item" onclick="showPage('selfhealing')">
+      <span class="nav-dot"></span> Self-Healing
+    </div>
+    <div class="nav-item" onclick="showPage('proinsights')">
+      <span class="nav-dot"></span> Pro Insights
+      <span class="nav-badge" style="background:var(--orange)">AI</span>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-title" id="pageTitle">Overview</div>
+    <div class="topbar-right">
+      <div class="topbar-status"><div class="live-dot"></div> Real-time</div>
+      <div class="topbar-status" id="lastUpdate">Updated just now</div>
+      <button class="btn" onclick="refreshAll()">Refresh</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <div id="page-overview" class="page active">
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card card-accent">
+          <div class="card-title">Active Agents</div>
+          <div class="card-value" id="statAgents">-</div>
+          <div class="card-sub">Currently deployed</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Sessions (7d)</div>
+          <div class="card-value" id="statSessions">-</div>
+          <div class="card-sub" id="statResolved">- resolved</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Tool Calls (7d)</div>
+          <div class="card-value" id="statTools">-</div>
+          <div class="card-sub" id="statTenants">- tenants</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Vector Memory</div>
+          <div class="card-value" id="statEmbeddings">-</div>
+          <div class="card-sub" id="statLearnings">- learnings active</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Top Issues This Week</div>
+          </div>
+          <div id="topIssues"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Active Agent Map</div>
+          </div>
+          <div id="agentMap"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Recent Activity</div>
+          <button class="btn" onclick="collectInsights()">Collect Batch Insights</button>
+        </div>
+        <div id="recentActivity"></div>
+      </div>
+    </div>
+
+    <div id="page-agents" class="page">
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Live Agent Dispatch</div>
+            <div class="topbar-status"><div class="live-dot"></div> Auto-refreshing</div>
+          </div>
+          <div class="grid grid-3" id="agentGrid"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Activity Feed</div>
+            <div class="topbar-status"><div class="live-dot"></div> Live</div>
+          </div>
+          <div class="step-feed" id="stepFeed"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-traces" class="page">
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recent Traces</div>
+          </div>
+          <div id="traceList"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Trace Timeline</div>
+            <select id="traceSessionSelect" onchange="loadTraceTimeline()" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:12px;">
+              <option value="">Select session</option>
+            </select>
+          </div>
+          <div id="traceTimeline" class="trace-timeline"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-sessions" class="page">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Session History</div>
+        </div>
+        <div id="sessionList"></div>
+      </div>
+    </div>
+
+    <div id="page-insights" class="page">
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Issue Frequency</div>
+          </div>
+          <div id="insightIssues"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Resolution Rates</div>
+          </div>
+          <div id="insightResolutions"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Batch Insights</div>
+          <button class="btn btn-primary" onclick="collectInsights()">Run Batch Collection</button>
+        </div>
+        <div id="batchInsights"></div>
+      </div>
+    </div>
+
+    <div id="page-learnings" class="page">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Agent Learning Corpus</div>
+          <button class="btn btn-primary" onclick="generateLearnings()">Generate from Sessions</button>
+        </div>
+        <p style="font-size:12px;color:var(--text3);margin-bottom:16px;">
+          Accumulated insights from past sessions that inform agent reasoning. Higher confidence = more reliably applied.
+        </p>
+        <div id="learningsList"></div>
+      </div>
+    </div>
+
+    <div id="page-logs" class="page">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Real-time Log Stream</div>
+          <div class="topbar-status"><div class="live-dot"></div> Streaming</div>
+        </div>
+        <div class="log-stream" id="logStream"></div>
+      </div>
+    </div>
+
+    <div id="page-selfhealing" class="page">
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card card-accent">
+          <div class="card-title">Errors Detected</div>
+          <div class="card-value" id="statErrors">-</div>
+          <div class="card-sub">Last 7 days</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Corrections Applied</div>
+          <div class="card-value" id="statCorrections">-</div>
+          <div class="card-sub">Auto-fixed</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Learnings Generated</div>
+          <div class="card-value" id="statHealingLearnings">-</div>
+          <div class="card-sub">From error patterns</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Success Rate</div>
+          <div class="card-value" id="statSuccessRate">-</div>
+          <div class="card-sub">Correction effectiveness</div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Self-Healing Loop</div>
+            <button class="btn" onclick="analyzeAllSessions()">Analyze All Sessions</button>
+          </div>
+          <div id="healingLoop">
+            <div class="healing-step">
+              <div class="step-indicator">1</div>
+              <div class="step-content">
+                <div class="step-title">Error Detection</div>
+                <div class="step-desc">Scanning tool execution logs for failures and error patterns</div>
+              </div>
+            </div>
+            <div class="healing-step">
+              <div class="step-indicator">2</div>
+              <div class="step-content">
+                <div class="step-title">Pattern Classification</div>
+                <div class="step-desc">Categorizing errors (permission, timeout, syntax, network, etc.)</div>
+              </div>
+            </div>
+            <div class="healing-step">
+              <div class="step-indicator">3</div>
+              <div class="step-content">
+                <div class="step-title">Memory Lookup</div>
+                <div class="step-desc">Searching agent learnings for similar past corrections</div>
+              </div>
+            </div>
+            <div class="healing-step">
+              <div class="step-indicator">4</div>
+              <div class="step-content">
+                <div class="step-title">Correction Suggestion</div>
+                <div class="step-desc">Generating fix recommendations based on patterns</div>
+              </div>
+            </div>
+            <div class="healing-step">
+              <div class="step-indicator">5</div>
+              <div class="step-content">
+                <div class="step-title">Learning Storage</div>
+                <div class="step-desc">Storing error-correction pairs for future reference</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Error Patterns</div>
+          </div>
+          <div id="errorPatterns"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Self-Healing History</div>
+        </div>
+        <div id="healingHistory"></div>
+      </div>
+    </div>
+
+    <div id="page-proinsights" class="page">
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card card-accent">
+          <div class="card-title">Health Score</div>
+          <div class="card-value" id="piHealthScore">-</div>
+          <div class="card-sub">AI-assessed</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Resolution Rate</div>
+          <div class="card-value" id="piResolutionRate">-</div>
+          <div class="card-sub" id="piTotalSessions">- sessions</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Error Clusters</div>
+          <div class="card-value" id="piErrorClusters">-</div>
+          <div class="card-sub" id="piErrorLoops">- loops detected</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Workflow Patterns</div>
+          <div class="card-value" id="piWorkflowPatterns">-</div>
+          <div class="card-sub" id="piSessionsAnalyzed">- sessions analyzed</div>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-title">Satisfaction</div>
+          <div class="card-value" id="piSatisfaction" style="font-size:28px">-</div>
+          <div class="card-sub" id="piSatisfactionSub">-</div>
+          <div style="margin-top:8px;height:6px;background:var(--surface2);border-radius:3px;overflow:hidden">
+            <div id="piSatisfactionBar" style="height:100%;width:0%;background:var(--green);border-radius:3px;transition:width 0.5s"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">User Sentiment</div>
+          <div class="card-value" id="piSentiment" style="font-size:28px">-</div>
+          <div class="card-sub" id="piSentimentSub">-</div>
+          <div style="display:flex;gap:8px;margin-top:8px;font-size:11px">
+            <span style="color:var(--green)" id="piSentPos">+0</span>
+            <span style="color:var(--text3)" id="piSentNeu">~0</span>
+            <span style="color:var(--red)" id="piSentNeg">-0</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Task Completion</div>
+          <div class="card-value" id="piTaskCompletion" style="font-size:28px">-</div>
+          <div class="card-sub" id="piTaskCompletionSub">-</div>
+          <div style="display:flex;gap:6px;margin-top:8px;font-size:11px">
+            <span style="color:var(--green)" id="piResolved">0 resolved</span>
+            <span style="color:var(--red)" id="piFailed">0 failed</span>
+            <span style="color:var(--yellow)" id="piPending">0 pending</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-3" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-title">Error Rate</div>
+          <div class="card-value" id="piErrorRate" style="font-size:28px">-</div>
+          <div class="card-sub" id="piErrorRateSub">-</div>
+          <div style="display:flex;gap:6px;margin-top:8px;font-size:11px">
+            <span style="color:var(--green)" id="piSuccessCalls">0 success</span>
+            <span style="color:var(--red)" id="piErrorCalls">0 errors</span>
+            <span style="color:var(--yellow)" id="piTimeoutCalls">0 timeouts</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">P50 Latency</div>
+          <div class="card-value" id="piP50Latency" style="font-size:28px">-</div>
+          <div class="card-sub" id="piLatencySub">-</div>
+          <div style="display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--text3)">
+            <span id="piP90">P90: -</span>
+            <span id="piP95">P95: -</span>
+            <span id="piP99">P99: -</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">User Feedback</div>
+          <div class="card-value" id="piFeedbackCount" style="font-size:28px">-</div>
+          <div class="card-sub" id="piFeedbackSub">responses collected</div>
+          <div id="piFeedbackTags" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header">
+          <div class="card-title">AI Recommendations (Qwen)</div>
+          <button class="btn btn-primary" id="btnGenerateRecs" onclick="generateProRecommendations()">Generate Analysis</button>
+        </div>
+        <div id="piExecutiveSummary" style="font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px"></div>
+        <div id="piCriticalIssues"></div>
+        <div id="piRecommendations"></div>
+        <div id="piToolAnalysis" style="margin-top:16px"></div>
+      </div>
+
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recurring Tool Patterns</div>
+          </div>
+          <div id="piPatterns"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Error Clusters</div>
+          </div>
+          <div id="piClusters"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Success vs Failure Patterns</div>
+          </div>
+          <div id="piSuccessFailure"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Workflow Signatures</div>
+          </div>
+          <div id="piWorkflows"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Failure Trajectories</div>
+          </div>
+          <div id="piTrajectories"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Tenant Profiles</div>
+          </div>
+          <div id="piTenants"></div>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="margin-top:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Per-Tool Error Rates</div>
+          </div>
+          <div id="piPerToolErrors"></div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recent User Feedback</div>
+          </div>
+          <div id="piFeedbackList"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="modal-overlay" id="sessionModal">
+  <div class="modal">
+    <span class="modal-close" onclick="closeModal()">&times;</span>
+    <div id="modalContent"></div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let eventSource = null;
+
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${page}`).classList.add('active');
+  event.target.closest('.nav-item').classList.add('active');
+  document.getElementById('pageTitle').textContent = {
+    overview: 'Overview', agents: 'Live Agents', traces: 'Trace Explorer',
+    sessions: 'Sessions', insights: 'Insights', learnings: 'Agent Learnings', 
+    logs: 'Log Stream', selfhealing: 'Self-Healing', proinsights: 'Pro Insights'
+  }[page];
+  refreshAll();
+}
+
+async function fetchJSON(url) {
+  try { const r = await fetch(url); return await r.json(); } catch(e) { console.error(e); return null; }
+}
+
+async function refreshAll() {
+  document.getElementById('lastUpdate').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  await Promise.all([loadOverview(), loadAgents(), loadTraces(), loadSessions(), loadInsights(), loadLearnings(), loadSelfHealing(), loadProInsights()]);
+}
+
+async function loadOverview() {
+  const [agents, analytics, vector] = await Promise.all([
+    fetchJSON(`${API}/dashboard/api/agents/live`),
+    fetchJSON(`${API}/dashboard/api/analytics`),
+    fetchJSON(`${API}/dashboard/api/vector/stats`),
+  ]);
+
+  if (agents) {
+    document.getElementById('statAgents').textContent = agents.count || 0;
+    document.getElementById('navAgentCount').textContent = agents.count || 0;
+    renderAgentMap(agents.agents || []);
+  }
+
+  if (analytics) {
+    const s = analytics.session_stats || {};
+    document.getElementById('statSessions').textContent = s.total_sessions || 0;
+    document.getElementById('statResolved').textContent = `${s.resolved_count || 0} resolved`;
+    document.getElementById('statTools').textContent = s.total_tool_calls || 0;
+    document.getElementById('statTenants').textContent = `${s.unique_tenants || 0} tenants`;
+    document.getElementById('statEmbeddings').textContent = vector?.weekly_embeddings || 0;
+    document.getElementById('statLearnings').textContent = `${analytics.total_learnings || 0} learnings active`;
+    renderTopIssues(analytics.top_issues || []);
+  }
+}
+
+function renderTopIssues(issues) {
+  const el = document.getElementById('topIssues');
+  if (!issues.length) { el.innerHTML = '<div class="empty">No issues this week</div>'; return; }
+  const max = Math.max(...issues.map(i => i.count));
+  const colors = ['var(--accent)', 'var(--cyan)', 'var(--green)', 'var(--orange)', 'var(--yellow)'];
+  el.innerHTML = issues.map((issue, i) => `
+    <div class="insight-row">
+      <div class="insight-bar-label">${issue.issue_category}</div>
+      <div class="insight-bar-track">
+        <div class="insight-bar-fill" style="width:${(issue.count/max)*100}%;background:${colors[i%colors.length]}"></div>
+      </div>
+      <div class="insight-bar-count">${issue.count}</div>
+    </div>
+  `).join('');
+}
+
+function renderAgentMap(agents) {
+  const el = document.getElementById('agentMap');
+  if (!agents.length) { el.innerHTML = '<div class="empty">No agents deployed</div>'; return; }
+  el.innerHTML = agents.slice(0, 6).map(a => `
+    <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+      <div class="live-dot"></div>
+      <div style="flex:1">
+        <div style="font-size:13px;font-weight:500">${a.agent_id || 'Agent'}</div>
+        <div style="font-size:11px;color:var(--text3)">${a.email || a.customer_id || 'Unknown'}</div>
+      </div>
+      <div style="font-size:11px;color:var(--text3);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${a.task_description || ''}">
+        ${a.task_description ? a.task_description.substring(0,40) + (a.task_description.length > 40 ? '...' : '') : 'No task'}
+      </div>
+      <div style="font-size:10px;color:var(--text3);min-width:60px;text-align:right">
+        ${a.started_at ? new Date(a.started_at).toLocaleTimeString() : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadAgents() {
+  const data = await fetchJSON(`${API}/dashboard/api/agents/live`);
+  if (!data) return;
+  const el = document.getElementById('agentGrid');
+  const agents = data.agents || [];
+  if (!agents.length) { el.innerHTML = '<div class="empty" style="grid-column:1/-1">No agents currently deployed</div>'; return; }
+  el.innerHTML = agents.map(a => `
+    <div class="agent-node active">
+      <div class="agent-status"><span class="status-badge active"><span class="live-dot" style="width:6px;height:6px"></span> Active</span></div>
+      <div class="agent-name">${a.agent_id || 'Agent'}</div>
+      <div class="agent-customer">${a.email || a.customer_id || 'Unknown customer'}</div>
+      ${a.company_name ? `<div style="font-size:11px;color:var(--text3)">${a.company_name}</div>` : ''}
+      <div class="agent-task">${a.task_description || 'No task description'}</div>
+      <div class="agent-meta">
+        <span>Status: ${a.resolution_status || 'pending'}</span>
+        <span>Started: ${a.started_at ? new Date(a.started_at).toLocaleTimeString() : 'N/A'}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadTraces() {
+  const data = await fetchJSON(`${API}/dashboard/api/traces/recent?limit=30`);
+  if (!data) return;
+  const el = document.getElementById('traceList');
+  const traces = data.traces || [];
+  if (!traces.length) { el.innerHTML = '<div class="empty">No traces yet</div>'; return; }
+  el.innerHTML = traces.slice(0, 20).map(t => {
+    const kindClass = t.span_kind === 'tool' ? 'tool' : t.span_kind === 'llm' ? 'llm' : 'message';
+    return `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:${t.span_kind==='tool'?'var(--cyan)':t.span_kind==='llm'?'var(--accent)':'var(--green)'}">${t.span_name}</span>
+          <span style="color:var(--text3)">${t.duration_ms || 0}ms</span>
+        </div>
+        <div style="color:var(--text3);margin-top:2px">${t.agent_id} | ${t.created_at ? new Date(t.created_at).toLocaleString() : ''}</div>
+      </div>
+    `;
+  }).join('');
+
+  const select = document.getElementById('traceSessionSelect');
+  const sessionIds = [...new Set(traces.filter(t => t.session_id).map(t => t.session_id))];
+  select.innerHTML = '<option value="">Select session</option>' + sessionIds.map(id => `<option value="${id}">${id.substring(0,8)}...</option>`).join('');
+}
+
+async function loadTraceTimeline() {
+  const sessionId = document.getElementById('traceSessionSelect').value;
+  if (!sessionId) return;
+  const data = await fetchJSON(`${API}/dashboard/api/traces/session/${sessionId}`);
+  if (!data) return;
+  const el = document.getElementById('traceTimeline');
+  const timeline = data.timeline || [];
+  if (!timeline.length) { el.innerHTML = '<div class="empty">No trace data</div>'; return; }
+  el.innerHTML = timeline.map(t => {
+    const kind = t.span_kind || 'message';
+    const input = typeof t.input_data === 'object' ? JSON.stringify(t.input_data).substring(0, 100) : '';
+    return `
+      <div class="trace-item ${kind}">
+        <div class="trace-label">${t.span_name}</div>
+        <div class="trace-detail">${input}</div>
+        <div class="trace-time">${t.duration_ms || 0}ms | ${t.start_time ? new Date(t.start_time).toLocaleTimeString() : ''}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadSessions() {
+  const data = await fetchJSON(`${API}/dashboard/api/sessions/history?limit=50`);
+  if (!data) return;
+  const el = document.getElementById('sessionList');
+  const sessions = data.sessions || [];
+  if (!sessions.length) { el.innerHTML = '<div class="empty">No sessions yet</div>'; return; }
+  el.innerHTML = `
+    <div class="session-row" style="font-weight:600;color:var(--text3);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;cursor:default">
+      <div>Task</div><div>Customer</div><div>Category</div><div>Time</div><div>Status</div>
+    </div>
+    ${sessions.map(s => `
+      <div class="session-row" onclick="showSessionDetail('${s.id}')">
+        <div class="session-task">${s.task_description || 'No description'}</div>
+        <div class="session-email">${s.email || '-'}</div>
+        <div class="session-cat">${s.issue_category || '-'}</div>
+        <div class="session-time">${s.started_at ? new Date(s.started_at).toLocaleDateString() : '-'}</div>
+        <div><span class="status-badge ${s.resolution_status === 'resolved' ? 'active' : s.resolution_status === 'pending' ? 'pending' : 'failed'}">${s.resolution_status || '-'}</span></div>
+      </div>
+    `).join('')}
+  `;
+}
+
+async function showSessionDetail(sessionId) {
+  const [trace, sessions] = await Promise.all([
+    fetchJSON(`${API}/dashboard/api/traces/summary/${sessionId}`),
+    fetchJSON(`${API}/dashboard/api/sessions/history?limit=1`),
+  ]);
+
+  const modal = document.getElementById('sessionModal');
+  const content = document.getElementById('modalContent');
+
+  let html = `<h2 style="font-size:18px;margin-bottom:16px">Session Trace</h2>`;
+
+  if (trace) {
+    html += `<div style="display:flex;gap:16px;margin-bottom:16px">
+      <div class="card" style="flex:1;padding:12px"><div class="card-title">Conversation</div><div class="card-value" style="font-size:20px">${trace.conversation?.length || 0}</div></div>
+      <div class="card" style="flex:1;padding:12px"><div class="card-title">Tool Calls</div><div class="card-value" style="font-size:20px">${trace.tool_chain?.length || 0}</div></div>
+      <div class="card" style="flex:1;padding:12px"><div class="card-title">LLM Calls</div><div class="card-value" style="font-size:20px">${trace.llm_decisions?.length || 0}</div></div>
+      <div class="card" style="flex:1;padding:12px"><div class="card-title">Duration</div><div class="card-value" style="font-size:20px">${((trace.total_duration_ms||0)/1000).toFixed(1)}s</div></div>
+    </div>`;
+
+    if (trace.conversation?.length) {
+      html += `<h3 style="font-size:14px;color:var(--text2);margin:16px 0 8px">Conversation Flow</h3>`;
+      html += trace.conversation.map(c => `
+        <div style="padding:6px 0;border-left:2px solid ${c.role==='user'?'var(--green)':'var(--accent)'};padding-left:12px;margin-bottom:6px">
+          <div style="font-size:11px;color:var(--text3)">${c.role} | ${c.timestamp ? new Date(c.timestamp).toLocaleTimeString() : ''}</div>
+          <div style="font-size:13px;color:var(--text2)">${c.content?.substring(0,200) || ''}</div>
+        </div>
+      `).join('');
+    }
+
+    if (trace.tool_chain?.length) {
+      html += `<h3 style="font-size:14px;color:var(--text2);margin:16px 0 8px">Tool Execution Chain</h3>`;
+      html += trace.tool_chain.map(t => `
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px">
+          <span style="color:var(--cyan)">${t.tool}</span>
+          <span class="status-badge ${t.status==='success'?'active':'failed'}">${t.status}</span>
+          <span style="color:var(--text3)">${t.duration_ms||0}ms</span>
+        </div>
+      `).join('');
+    }
+  }
+
+  content.innerHTML = html;
+  modal.classList.add('show');
+}
+
+function closeModal() { document.getElementById('sessionModal').classList.remove('show'); }
+
+async function loadInsights() {
+  const [analytics, batch] = await Promise.all([
+    fetchJSON(`${API}/dashboard/api/analytics`),
+    fetchJSON(`${API}/dashboard/api/insights/batch`),
+  ]);
+
+  if (analytics) {
+    const issues = analytics.top_issues || [];
+    const el = document.getElementById('insightIssues');
+    if (!issues.length) { el.innerHTML = '<div class="empty">No data</div>'; }
+    else {
+      const max = Math.max(...issues.map(i => i.count));
+      el.innerHTML = issues.map((issue, i) => `
+        <div class="insight-row">
+          <div class="insight-bar-label">${issue.issue_category}</div>
+          <div class="insight-bar-track"><div class="insight-bar-fill" style="width:${(issue.count/max)*100}%;background:var(--accent)"></div></div>
+          <div class="insight-bar-count">${issue.count}</div>
+        </div>
+      `).join('');
+    }
+  }
+
+  if (batch) {
+    const el = document.getElementById('batchInsights');
+    const insights = batch.insights || [];
+    if (!insights.length) { el.innerHTML = '<div class="empty">No batch insights collected yet. Click "Run Batch Collection"</div>'; return; }
+    el.innerHTML = insights.slice(0, 20).map(i => `
+      <div style="padding:12px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between">
+          <span style="font-size:13px;font-weight:500;color:var(--text)">${i.title}</span>
+          <span style="font-size:11px;color:var(--text3)">${i.insight_type}</span>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-top:4px">${i.description || ''}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px">${i.source_session_count || 0} sessions | ${i.created_at ? new Date(i.created_at).toLocaleString() : ''}</div>
+      </div>
+    `).join('');
+  }
+}
+
+async function loadLearnings() {
+  const data = await fetchJSON(`${API}/dashboard/api/learnings`);
+  if (!data) return;
+  const el = document.getElementById('learningsList');
+  const learnings = data.learnings || [];
+  if (!learnings.length) { el.innerHTML = '<div class="empty">No learnings generated yet. Click "Generate from Sessions"</div>'; return; }
+  el.innerHTML = learnings.map(l => `
+    <div class="learning-card">
+      <div class="learning-category">${l.issue_category}</div>
+      <div class="learning-text">${l.learning_text}</div>
+      <div class="learning-meta">
+        <span>Confidence: ${(l.confidence * 100).toFixed(0)}%</span>
+        <span>Applied: ${l.times_applied || 0} times</span>
+        <span>${l.created_at ? new Date(l.created_at).toLocaleDateString() : ''}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadSelfHealing() {
+  const [history, learnings] = await Promise.all([
+    fetchJSON(`${API}/dashboard/api/self-healing/history`),
+    fetchJSON(`${API}/dashboard/api/self-healing/learnings`),
+  ]);
+
+  // Update stats
+  if (history) {
+    const records = history.history || [];
+    const totalErrors = records.reduce((sum, r) => sum + (r.data?.total_errors || 0), 0);
+    const totalCorrections = records.reduce((sum, r) => sum + (r.data?.corrections_suggested || 0), 0);
+    const successRate = totalErrors > 0 ? ((totalCorrections / totalErrors) * 100).toFixed(1) : 0;
+    
+    document.getElementById('statErrors').textContent = totalErrors;
+    document.getElementById('statCorrections').textContent = totalCorrections;
+    document.getElementById('statSuccessRate').textContent = `${successRate}%`;
+    
+    renderErrorPatterns(records);
+    renderHealingHistory(records);
+  }
+
+  if (learnings) {
+    const errorLearnings = learnings.learnings || [];
+    document.getElementById('statHealingLearnings').textContent = errorLearnings.length;
+  }
+}
+
+function renderErrorPatterns(records) {
+  const el = document.getElementById('errorPatterns');
+  if (!records.length) {
+    el.innerHTML = '<div class="empty">No error patterns detected yet</div>';
+    return;
+  }
+
+  // Aggregate error types
+  const errorTypes = {};
+  records.forEach(r => {
+    const types = r.data?.error_types || [];
+    types.forEach(type => {
+      errorTypes[type] = (errorTypes[type] || 0) + 1;
+    });
+  });
+
+  const sorted = Object.entries(errorTypes).sort((a, b) => b[1] - a[1]);
+  el.innerHTML = sorted.map(([type, count]) => `
+    <div class="error-pattern">
+      <div class="error-type">${type}</div>
+      <div class="error-count">${count} occurrence${count > 1 ? 's' : ''}</div>
+    </div>
+  `).join('');
+}
+
+function renderHealingHistory(records) {
+  const el = document.getElementById('healingHistory');
+  if (!records.length) {
+    el.innerHTML = '<div class="empty">No healing history yet</div>';
+    return;
+  }
+
+  el.innerHTML = records.slice(0, 20).map(r => `
+    <div class="healing-record">
+      <div class="healing-record-header">
+        <div class="healing-record-title">${r.title}</div>
+        <div class="healing-record-meta">${r.created_at ? new Date(r.created_at).toLocaleString() : ''}</div>
+      </div>
+      <div class="healing-record-details">
+        <div>${r.description}</div>
+        <div style="margin-top:8px">
+          <strong>Errors:</strong> ${r.data?.total_errors || 0} | 
+          <strong>Corrections:</strong> ${r.data?.corrections_suggested || 0} | 
+          <strong>Most Common:</strong> ${r.data?.most_common_error || 'N/A'}
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function analyzeAllSessions() {
+  if (!confirm('This will analyze all sessions for error patterns. Continue?')) return;
+  
+  const sessions = await fetchJSON(`${API}/dashboard/api/sessions/history?limit=100`);
+  if (!sessions) return;
+
+  const btn = event?.target;
+  const originalText = btn ? btn.textContent : '';
+  if (btn) btn.textContent = 'Analyzing...';
+
+  let analyzed = 0;
+  const total = (sessions.sessions || []).length;
+  for (const session of (sessions.sessions || [])) {
+    try {
+      await fetch(`${API}/dashboard/api/self-healing/analyze/${session.id}`, { method: 'POST' });
+      analyzed++;
+    } catch (e) {
+      console.error(`Failed to analyze session ${session.id}:`, e);
+    }
+  }
+
+  if (btn) btn.textContent = originalText;
+  alert(`Analyzed ${analyzed}/${total} sessions`);
+  refreshAll();
+}
+
+async function collectInsights() {
+  const data = await fetch(`${API}/dashboard/api/insights/collect`, { method: 'POST' });
+  const result = await data.json();
+  alert(`Collected ${result.insights?.length || 0} insights`);
+  refreshAll();
+}
+
+async function generateLearnings() {
+  const data = await fetch(`${API}/dashboard/api/learnings/generate`, { method: 'POST' });
+  const result = await data.json();
+  alert(`Generated ${result.learnings?.length || 0} learnings`);
+  refreshAll();
+}
+
+function startLogStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource(`${API}/dashboard/api/events/stream`);
+  eventSource.onmessage = (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      appendLog(event);
+    } catch(err) {}
+  };
+}
+
+function appendLog(event) {
+  const el = document.getElementById('logStream');
+  const time = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+  const type = event.type || 'event';
+  
+  let cls = '';
+  let msg = '';
+  let icon = '•';
+  let stepClass = '';
+  
+  if (type === 'agent_dispatched') {
+    cls = 'dispatch';
+    stepClass = 'dispatch';
+    icon = '🚀';
+    msg = `Agent deployed to ${event.email || event.customer_id || 'customer'} | Task: ${event.task_context || 'Unknown'}`;
+  }
+  else if (type === 'plan_proposed') {
+    cls = 'reasoning';
+    stepClass = 'thinking';
+    icon = '🧠';
+    const cmds = event.commands || [];
+    msg = `Planning: ${event.reasoning || 'Execution plan'} | Commands: ${cmds.length}`;
+  }
+  else if (type === 'allowlist_expanded') {
+    cls = 'success';
+    stepClass = 'thinking';
+    icon = '🔓';
+    const added = event.added_commands || [];
+    msg = `Allowlist expanded: ${added.join(', ')}`;
+  }
+  else if (type === 'command_start') {
+    cls = '';
+    stepClass = 'executing';
+    icon = '▶';
+    msg = `Executing: ${event.command || ''}`;
+  }
+  else if (type === 'command_complete') {
+    cls = event.status === 'success' ? 'success' : 'error';
+    stepClass = event.status === 'success' ? 'active' : 'error';
+    icon = event.status === 'success' ? '✓' : '✗';
+    msg = `${event.status?.toUpperCase() || 'DONE'}: ${event.command || ''} ${event.duration_ms ? `(${event.duration_ms}ms)` : ''}`;
+  }
+  else if (type === 'task_start') {
+    cls = 'reasoning';
+    stepClass = 'thinking';
+    icon = '📋';
+    msg = `Task started: ${event.description || ''}`;
+  }
+  else if (type === 'task_complete') {
+    cls = 'success';
+    stepClass = 'active';
+    icon = '✅';
+    msg = `Task completed: ${event.summary || 'Finished'}`;
+  }
+  else if (type === 'session_finalized') {
+    cls = 'success';
+    stepClass = 'active';
+    icon = '🏁';
+    msg = `Session ended: ${event.issue_category || ''} → ${event.resolution_status || ''}`;
+  }
+  else {
+    msg = event.summary || event.command || event.error || JSON.stringify(event).substring(0, 150);
+  }
+  
+  const line = document.createElement('div');
+  line.className = `log-line ${cls}`;
+  line.innerHTML = `
+    <span class="log-time">${time}</span>
+    <span class="log-agent">${event.agent_id || '-'}</span>
+    <span class="log-msg">${icon} ${msg}</span>
+  `;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+  if (el.children.length > 200) el.removeChild(el.firstChild);
+  
+  addToStepFeed(event, time, icon, msg, stepClass);
+}
+
+function addToStepFeed(event, time, icon, msg, stepClass) {
+  const feed = document.getElementById('stepFeed');
+  if (!feed) return;
+  
+  const item = document.createElement('div');
+  item.className = `step-item ${stepClass}`;
+  item.onclick = () => item.classList.toggle('expanded');
+  
+  let detail = '';
+  if (event.type === 'plan_proposed') {
+    detail = `Reasoning: ${event.reasoning || 'N/A'}\nCommands: ${(event.commands || []).join('\n')}`;
+  } else if (event.type === 'command_complete') {
+    detail = `Output: ${event.output_preview || event.output || 'N/A'}`;
+  } else if (event.type === 'task_complete') {
+    detail = `Summary: ${event.summary || 'N/A'}`;
+  } else if (event.type === 'agent_dispatched') {
+    detail = `Customer: ${event.email || 'N/A'}\nTask: ${event.task_context || 'N/A'}\nMeet: ${event.meet_url || 'N/A'}`;
+  }
+  
+  item.innerHTML = `
+    <div class="step-icon">${icon}</div>
+    <div class="step-content">
+      <div class="step-title">${event.type || 'event'}</div>
+      <div class="step-detail">${msg}</div>
+      ${detail ? `<div class="step-expand">${detail}</div>` : ''}
+    </div>
+    <div class="step-time">${time}</div>
+  `;
+  
+  feed.insertBefore(item, feed.firstChild);
+  if (feed.children.length > 50) feed.removeChild(feed.lastChild);
+}
+
+async function loadRecentActivity() {
+  const data = await fetchJSON(`${API}/dashboard/api/traces/recent?limit=10`);
+  if (!data) return;
+  const el = document.getElementById('recentActivity');
+  const traces = data.traces || [];
+  if (!traces.length) { el.innerHTML = '<div class="empty">No recent activity</div>'; return; }
+  el.innerHTML = traces.map(t => `
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <span style="color:${t.span_kind==='tool'?'var(--cyan)':'var(--accent)'};min-width:120px">${t.span_name}</span>
+      <span style="color:var(--text2);flex:1">${t.agent_id}</span>
+      <span style="color:var(--text3)">${t.duration_ms||0}ms</span>
+      <span style="color:var(--text3)">${t.created_at ? new Date(t.created_at).toLocaleTimeString() : ''}</span>
+    </div>
+  `).join('');
+}
+
+let _proInsightsCache = null;
+
+async function loadProInsights() {
+  try {
+    const [patterns, failures, usage, metrics, feedback] = await Promise.all([
+      fetchJSON(`${API}/dashboard/api/pro-insights/patterns`),
+      fetchJSON(`${API}/dashboard/api/pro-insights/failures`),
+      fetchJSON(`${API}/dashboard/api/pro-insights/usage`),
+      fetchJSON(`${API}/dashboard/api/pro-insights/metrics`),
+      fetchJSON(`${API}/dashboard/api/pro-insights/feedback?limit=20`),
+    ]);
+
+    _proInsightsCache = { patterns, failures, usage, metrics, feedback };
+
+    const summary = failures?.summary || {};
+    const resRate = summary.resolution_rate || 0;
+    document.getElementById('piResolutionRate').textContent = `${(resRate * 100).toFixed(1)}%`;
+    document.getElementById('piTotalSessions').textContent = `${summary.total_sessions || 0} sessions`;
+    document.getElementById('piErrorClusters').textContent = failures?.total_clusters || 0;
+    document.getElementById('piErrorLoops').textContent = `${failures?.total_loops || 0} loops detected`;
+    document.getElementById('piWorkflowPatterns').textContent = (usage?.workflow_patterns || []).length;
+    document.getElementById('piSessionsAnalyzed').textContent = `${patterns?.total_sessions_analyzed || 0} sessions analyzed`;
+
+    renderCoreMetrics(metrics, feedback);
+    renderPerToolErrors(metrics);
+    renderFeedbackList(feedback);
+    renderProPatterns(patterns);
+    renderProClusters(failures);
+    renderProSuccessFailure(patterns);
+    renderProWorkflows(usage);
+    renderProTrajectories(patterns);
+    renderProTenants(usage);
+  } catch (e) {
+    console.error('loadProInsights error:', e);
+  }
+}
+
+function renderCoreMetrics(metrics, feedback) {
+  if (!metrics) return;
+
+  const sat = metrics.satisfaction || {};
+  const satScore = sat.avg_satisfaction;
+  const satEl = document.getElementById('piSatisfaction');
+  if (satScore != null) {
+    satEl.textContent = `${(satScore * 100).toFixed(0)}%`;
+    satEl.style.color = satScore >= 0.7 ? 'var(--green)' : satScore >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    document.getElementById('piSatisfactionBar').style.width = `${satScore * 100}%`;
+    document.getElementById('piSatisfactionBar').style.background = satScore >= 0.7 ? 'var(--green)' : satScore >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    document.getElementById('piSatisfactionSub').textContent = `${sat.satisfaction_rate != null ? (sat.satisfaction_rate * 100).toFixed(0) : 0}% satisfied (${sat.source})`;
+  } else {
+    satEl.textContent = 'N/A';
+    document.getElementById('piSatisfactionSub').textContent = 'No feedback yet';
+  }
+
+  const sent = metrics.sentiment || {};
+  const sentScore = sent.avg_sentiment_score;
+  const sentEl = document.getElementById('piSentiment');
+  if (sentScore != null) {
+    sentEl.textContent = sentScore >= 0.3 ? 'Positive' : sentScore >= -0.3 ? 'Neutral' : 'Negative';
+    sentEl.style.color = sentScore >= 0.3 ? 'var(--green)' : sentScore >= -0.3 ? 'var(--yellow)' : 'var(--red)';
+    document.getElementById('piSentimentSub').textContent = `Score: ${sentScore.toFixed(2)} (${sent.total_feedback} responses)`;
+  } else {
+    sentEl.textContent = 'N/A';
+    document.getElementById('piSentimentSub').textContent = 'No sentiment data';
+  }
+  document.getElementById('piSentPos').textContent = `+${sent.positive || 0}`;
+  document.getElementById('piSentNeu').textContent = `~${sent.neutral || 0}`;
+  document.getElementById('piSentNeg').textContent = `-${sent.negative || 0}`;
+
+  const tc = metrics.task_completion || {};
+  const tcEl = document.getElementById('piTaskCompletion');
+  tcEl.textContent = `${((tc.completion_rate || 0) * 100).toFixed(0)}%`;
+  tcEl.style.color = tc.completion_rate >= 0.7 ? 'var(--green)' : tc.completion_rate >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+  document.getElementById('piTaskCompletionSub').textContent = `${tc.total_sessions || 0} sessions (${tc.period_days}d)`;
+  document.getElementById('piResolved').textContent = `${tc.resolved || 0} resolved`;
+  document.getElementById('piFailed').textContent = `${tc.failed || 0} failed`;
+  document.getElementById('piPending').textContent = `${tc.pending || 0} pending`;
+
+  const er = metrics.error_rate || {};
+  const erEl = document.getElementById('piErrorRate');
+  erEl.textContent = `${((er.overall_error_rate || 0) * 100).toFixed(1)}%`;
+  erEl.style.color = er.overall_error_rate <= 0.05 ? 'var(--green)' : er.overall_error_rate <= 0.15 ? 'var(--yellow)' : 'var(--red)';
+  document.getElementById('piErrorRateSub').textContent = `${er.total_tool_calls || 0} total calls`;
+  document.getElementById('piSuccessCalls').textContent = `${er.success_calls || 0} success`;
+  document.getElementById('piErrorCalls').textContent = `${er.error_calls || 0} errors`;
+  document.getElementById('piTimeoutCalls').textContent = `${er.timeout_calls || 0} timeouts`;
+
+  const lat = metrics.latency || {};
+  const latEl = document.getElementById('piP50Latency');
+  latEl.textContent = `${lat.p50_ms || 0}ms`;
+  latEl.style.color = lat.p50_ms <= 500 ? 'var(--green)' : lat.p50_ms <= 2000 ? 'var(--yellow)' : 'var(--red)';
+  document.getElementById('piLatencySub').textContent = `${lat.sample_count || 0} samples | mean ${lat.mean_ms || 0}ms`;
+  document.getElementById('piP90').textContent = `P90: ${lat.p90_ms || 0}ms`;
+  document.getElementById('piP95').textContent = `P95: ${lat.p95_ms || 0}ms`;
+  document.getElementById('piP99').textContent = `P99: ${lat.p99_ms || 0}ms`;
+
+  const fbCount = feedback?.feedback?.length || 0;
+  document.getElementById('piFeedbackCount').textContent = fbCount;
+  document.getElementById('piFeedbackSub').textContent = `${sat.total_feedback_responses || 0} total responses`;
+}
+
+function renderPerToolErrors(metrics) {
+  const el = document.getElementById('piPerToolErrors');
+  const tools = metrics?.error_rate?.per_tool_error_rates || [];
+  if (!tools.length) { el.innerHTML = '<div class="empty">No tool error data</div>'; return; }
+  const maxRate = Math.max(...tools.map(t => t.error_rate), 0.01);
+  el.innerHTML = tools.slice(0, 10).map(t => {
+    const pct = (t.error_rate * 100).toFixed(1);
+    const color = t.error_rate <= 0.05 ? 'var(--green)' : t.error_rate <= 0.15 ? 'var(--yellow)' : 'var(--red)';
+    return `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text);font-weight:500">${t.tool}</span>
+          <span style="color:${color};font-weight:500">${pct}%</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+          <div style="flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${(t.error_rate/maxRate)*100}%;background:${color};border-radius:2px"></div>
+          </div>
+          <span style="color:var(--text3);font-size:11px">${t.errors}/${t.total_calls}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderFeedbackList(data) {
+  const el = document.getElementById('piFeedbackList');
+  const fb = data?.feedback || [];
+  if (!fb.length) { el.innerHTML = '<div class="empty">No feedback submitted yet</div>'; return; }
+  const sentColors = { positive: 'var(--green)', neutral: 'var(--yellow)', negative: 'var(--red)' };
+  el.innerHTML = fb.slice(0, 15).map(f => {
+    const satPct = f.satisfaction_score != null ? `${(f.satisfaction_score * 100).toFixed(0)}%` : '-';
+    const sentColor = sentColors[f.sentiment] || 'var(--text3)';
+    return `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--text2)">${f.company_name || f.tenant_email || 'Unknown'}</span>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span style="color:var(--cyan)">${satPct}</span>
+            ${f.sentiment ? `<span style="color:${sentColor};font-size:11px">${f.sentiment}</span>` : ''}
+            ${f.task_completed != null ? `<span style="color:${f.task_completed ? 'var(--green)' : 'var(--red)'};font-size:11px">${f.task_completed ? 'done' : 'incomplete'}</span>` : ''}
+          </div>
+        </div>
+        ${f.feedback_text ? `<div style="color:var(--text3);margin-top:4px;font-size:11px;font-style:italic">"${f.feedback_text.substring(0, 100)}"</div>` : ''}
+        <div style="color:var(--text3);margin-top:2px;font-size:11px">${f.resolution_status || '-'} | ${f.created_at ? new Date(f.created_at).toLocaleDateString() : '-'}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderProPatterns(data) {
+  const el = document.getElementById('piPatterns');
+  const patterns = data?.recurring_patterns || [];
+  if (!patterns.length) { el.innerHTML = '<div class="empty">No patterns detected</div>'; return; }
+  el.innerHTML = patterns.slice(0, 10).map(p => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;flex:1">
+          ${p.tools.map(t => `<span style="background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--cyan);font-size:11px">${t}</span>`).join('<span style="color:var(--text3)">→</span>')}
+        </div>
+        <span style="color:var(--text3);min-width:50px;text-align:right">${p.frequency}x</span>
+      </div>
+      <div style="color:var(--text3);margin-top:4px;font-size:11px">${p.session_count} sessions | length ${p.length}</div>
+    </div>
+  `).join('');
+}
+
+function renderProClusters(data) {
+  const el = document.getElementById('piClusters');
+  const clusters = data?.error_clusters || [];
+  if (!clusters.length) { el.innerHTML = '<div class="empty">No error clusters</div>'; return; }
+  el.innerHTML = clusters.slice(0, 10).map(c => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--red);font-weight:500">${c.tool}:${c.error_type}</span>
+        <span style="color:var(--text3)">${c.occurrence_count} errors</span>
+      </div>
+      <div style="color:var(--text3);margin-top:2px">${c.affected_sessions} sessions | avg ${Math.round(c.avg_duration_ms)}ms</div>
+      ${c.sample_messages?.[0] ? `<div style="color:var(--text3);margin-top:4px;font-size:11px;font-style:italic">"${c.sample_messages[0].substring(0, 80)}..."</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function renderProSuccessFailure(data) {
+  const el = document.getElementById('piSuccessFailure');
+  const comp = data?.success_vs_failure || {};
+  const successTools = comp.success_tool_distribution || {};
+  const failureTools = comp.failure_tool_distribution || {};
+  const allTools = [...new Set([...Object.keys(successTools), ...Object.keys(failureTools)])];
+
+  if (!allTools.length) { el.innerHTML = '<div class="empty">No comparison data</div>'; return; }
+
+  const maxVal = Math.max(...allTools.map(t => Math.max(successTools[t] || 0, failureTools[t] || 0)), 1);
+  el.innerHTML = `
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">
+      <span style="color:var(--green)">■</span> Success (${comp.successful_sessions || 0})
+      <span style="color:var(--red);margin-left:12px">■</span> Failure (${comp.failed_sessions || 0})
+    </div>
+    ${allTools.slice(0, 10).map(t => `
+      <div style="padding:4px 0;font-size:12px">
+        <div style="color:var(--text2);margin-bottom:2px">${t}</div>
+        <div style="display:flex;gap:4px;align-items:center">
+          <div style="flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${((successTools[t]||0)/maxVal)*100}%;background:var(--green)"></div>
+          </div>
+          <span style="color:var(--text3);min-width:25px;text-align:right;font-size:11px">${successTools[t]||0}</span>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;margin-top:2px">
+          <div style="flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${((failureTools[t]||0)/maxVal)*100}%;background:var(--red)"></div>
+          </div>
+          <span style="color:var(--text3);min-width:25px;text-align:right;font-size:11px">${failureTools[t]||0}</span>
+        </div>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderProWorkflows(data) {
+  const el = document.getElementById('piWorkflows');
+  const workflows = data?.workflow_patterns || [];
+  if (!workflows.length) { el.innerHTML = '<div class="empty">No workflow patterns</div>'; return; }
+  el.innerHTML = workflows.slice(0, 8).map(w => {
+    const rate = w.success_rate || 0;
+    const rateColor = rate >= 0.7 ? 'var(--green)' : rate >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    return `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px">
+          ${w.workflow_signature.map(s => `<span style="background:var(--surface2);padding:2px 6px;border-radius:3px;color:var(--accent2);font-size:11px">${s}</span>`).join('')}
+        </div>
+        <div style="display:flex;justify-content:space-between;color:var(--text3);font-size:11px">
+          <span>Freq: ${w.frequency}</span>
+          <span style="color:${rateColor}">Success: ${(rate*100).toFixed(0)}%</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderProTrajectories(data) {
+  const el = document.getElementById('piTrajectories');
+  const trajectories = data?.failure_trajectories || [];
+  if (!trajectories.length) { el.innerHTML = '<div class="empty">No failure trajectories</div>'; return; }
+  el.innerHTML = trajectories.slice(0, 8).map(t => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div style="display:flex;justify-content:space-between">
+        <span style="color:var(--text2)">${t.session_id?.substring(0, 8) || '?'}...</span>
+        <span style="color:var(--red)">${t.error_count} errors${t.loop_detected ? ' ⚠ LOOP' : ''}</span>
+      </div>
+      <div style="color:var(--text3);margin-top:2px">
+        ${t.issue_category || 'unknown'} | ${t.total_tools} tools
+        ${t.most_common_error_tool ? ` | worst: ${t.most_common_error_tool} (${t.most_common_error_count}x)` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderProTenants(data) {
+  const el = document.getElementById('piTenants');
+  const tenants = data?.tenant_profiles || [];
+  if (!tenants.length) { el.innerHTML = '<div class="empty">No tenant data</div>'; return; }
+  const tierColors = { power_user: 'var(--accent)', regular: 'var(--green)', occasional: 'var(--yellow)', new: 'var(--text3)' };
+  el.innerHTML = tenants.slice(0, 10).map(t => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="color:var(--text);font-weight:500">${t.company_name || t.email || 'Unknown'}</div>
+        <div style="color:var(--text3);font-size:11px">${t.session_count} sessions | avg ${t.avg_tool_calls} tools</div>
+      </div>
+      <div style="text-align:right">
+        <span class="status-badge" style="background:${tierColors[t.profile_tier]||'var(--text3)'}20;color:${tierColors[t.profile_tier]||'var(--text3)'}">${t.profile_tier}</span>
+        <div style="color:var(--text3);font-size:11px;margin-top:4px">${(t.resolution_rate*100).toFixed(0)}% resolved</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function generateProRecommendations() {
+  const btn = document.getElementById('btnGenerateRecs');
+  const origText = btn.textContent;
+  btn.textContent = 'Analyzing with Qwen... (may take 30-60s)';
+  btn.disabled = true;
+  
+  document.getElementById('piHealthScore').textContent = '...';
+  document.getElementById('piHealthScore').style.color = 'var(--yellow)';
+
+  try {
+    const resp = await fetch(`${API}/dashboard/api/pro-insights/recommendations`, { method: 'POST' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+    const data = await resp.json();
+
+    const healthScore = data.overall_health_score || 0;
+    document.getElementById('piHealthScore').textContent = `${(healthScore * 100).toFixed(0)}%`;
+    document.getElementById('piHealthScore').style.color = healthScore >= 0.7 ? 'var(--green)' : healthScore >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+
+    document.getElementById('piExecutiveSummary').innerHTML = data.summary
+      ? `<div style="padding:12px;background:var(--surface2);border-radius:6px;border-left:3px solid var(--accent)">${data.summary}</div>`
+      : '';
+
+    const issuesEl = document.getElementById('piCriticalIssues');
+    const issues = data.critical_issues || [];
+    if (issues.length) {
+      issuesEl.innerHTML = `<div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">Critical Issues</div>` +
+        issues.map(i => `
+          <div style="padding:10px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.2);border-radius:6px;margin-bottom:6px">
+            <div style="font-size:13px;font-weight:500;color:var(--red)">${i.title}</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:4px">${i.description}</div>
+            ${i.evidence ? `<div style="font-size:11px;color:var(--text3);margin-top:4px">Evidence: ${i.evidence}</div>` : ''}
+          </div>
+        `).join('');
+    } else { issuesEl.innerHTML = ''; }
+
+    const recsEl = document.getElementById('piRecommendations');
+    const recs = data.recommendations || [];
+    const priorityColors = { critical: 'var(--red)', high: 'var(--orange)', medium: 'var(--yellow)', low: 'var(--green)' };
+    if (recs.length) {
+      recsEl.innerHTML = `<div style="font-size:12px;color:var(--text3);margin:12px 0 8px;text-transform:uppercase;letter-spacing:0.5px">Recommendations</div>` +
+        recs.map(r => `
+          <div style="padding:10px;background:var(--surface2);border-radius:6px;margin-bottom:6px;border-left:3px solid ${priorityColors[r.priority]||'var(--text3)'}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:13px;font-weight:500;color:var(--text)">${r.title}</span>
+              <span style="font-size:11px;color:var(--text3)">${r.category} | ${(r.confidence*100).toFixed(0)}% conf</span>
+            </div>
+            <div style="font-size:12px;color:var(--text2);margin-top:4px">${r.description}</div>
+            ${r.expected_impact ? `<div style="font-size:11px;color:var(--green);margin-top:4px">Impact: ${r.expected_impact}</div>` : ''}
+          </div>
+        `).join('');
+    } else { recsEl.innerHTML = ''; }
+
+    const toolEl = document.getElementById('piToolAnalysis');
+    const tools = data.tool_analysis || [];
+    if (tools.length) {
+      const assessColors = { overused: 'var(--orange)', underused: 'var(--yellow)', misused: 'var(--red)', optimal: 'var(--green)' };
+      toolEl.innerHTML = `<div style="font-size:12px;color:var(--text3);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.5px">Tool Analysis</div>` +
+        tools.map(t => `
+          <div style="display:flex;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+            <span style="color:var(--text);min-width:120px">${t.tool}</span>
+            <span style="color:${assessColors[t.assessment]||'var(--text3)'};font-weight:500;min-width:80px">${t.assessment}</span>
+            <span style="color:var(--text3);flex:1">${t.suggestion}</span>
+          </div>
+        `).join('');
+    } else { toolEl.innerHTML = ''; }
+
+    btn.textContent = 'Re-run Analysis';
+  } catch (e) {
+    console.error('generateProRecommendations error:', e);
+    document.getElementById('piHealthScore').textContent = 'Error';
+    document.getElementById('piHealthScore').style.color = 'var(--red)';
+    btn.textContent = origText;
+    alert('Failed to generate recommendations: ' + e.message);
+  }
+  btn.disabled = false;
+}
+
+setInterval(refreshAll, 10000);
+startLogStream();
+refreshAll();
+loadRecentActivity();
+</script>
+</body>
+</html>

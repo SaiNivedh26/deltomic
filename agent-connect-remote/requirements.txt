@@ -1,8 +1,8 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 langchain>=0.3.0
+langchain-aws>=0.2.0
 langchain-google-genai>=2.0.0
-langchain-groq>=1.0.0
 langgraph>=0.2.0
 langsmith>=0.10.0
 python-dotenv>=1.0.0
@@ -11,3 +11,4 @@ psycopg2-binary>=2.9.0
 pingram-python>=0.1.0
 composio>=0.2.0
 aiohttp>=3.9.0
+numpy>=1.24.0
