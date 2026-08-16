@@ -79,6 +79,12 @@
       "skillPath": "skills/cockroachdb-security-and-governance/configuring-sso-and-scim/SKILL.md",
       "computedHash": "c080a0b693372b6faf66732c7d3965c81b0f9e6fe8a109cc2b670606d6f1a237"
     },
+    "design-audit": {
+      "source": "devanshuDesai/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/design-audit/SKILL.md",
+      "computedHash": "efe95e615a1a0969cb496c46ad8dc6990edf8b05290df676c77bf244c058f9de"
+    },
     "designing-application-transactions": {
       "source": "cockroachlabs/cockroachdb-skills",
       "sourceType": "github",
@@ -102,6 +108,12 @@
       "sourceType": "github",
       "skillPath": "skills/cockroachdb-security-and-governance/enforcing-password-policies/SKILL.md",
       "computedHash": "88bd057281ee2c78e57d58a44afc3a094d4f30e7733fb0420d0db908672b9ace"
+    },
+    "expo-liquid-glass": {
+      "source": "devanshuDesai/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/expo-liquid-glass/SKILL.md",
+      "computedHash": "54e019fbdcf965286d9eda859cc30376d53e0ea22d9b41384044e9a787599265"
     },
     "hardening-user-privileges": {
       "source": "cockroachlabs/cockroachdb-skills",
