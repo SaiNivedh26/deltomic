@@ -97,9 +97,17 @@ Real-time visibility into active agent sessions, which customers are being serve
 
 ## Get Started
 
+check [get-started.md](get-started.md)
 <tbd>
 
 <br>
+
+## Tested servers from the following providers
+
+![AWS](https://img.shields.io/badge/AWS-232F3E?logo=amazonaws&logoColor=white)
+![Oracle Cloud](https://img.shields.io/badge/Oracle%20Cloud-F80000?logo=oracle&logoColor=white)
+![Microsoft Azure](https://img.shields.io/badge/Microsoft%20Azure-0078D4?logo=microsoftazure&logoColor=white)
+![Google Cloud](https://img.shields.io/badge/Google%20Cloud-4285F4?logo=googlecloud&logoColor=white)
 
 ------
 
