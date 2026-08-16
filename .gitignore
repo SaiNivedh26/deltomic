@@ -3,4 +3,6 @@ del/
 __pycache__/
 agent-connect-remote/__pycache__/
 agent-connect-remote/.env
-
+deltomic-demo/
+try-thala/
+opencode.json
