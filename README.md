@@ -48,7 +48,7 @@
 
 <br>
 
-[![Agnent Thala Prototype Launch](https://github.com/user-attachments/assets/4eefe3bb-34e0-4f16-aa4b-6dc944e67a8f)](https://youtu.be/khW5-6Behaw)
+[![Agnent Thala Prototype Launch](https://github.com/user-attachments/assets/4eefe3bb-34e0-4f16-aa4b-6dc944e67a8f)](https://youtu.be/766rjkoyZoQ?si=qPSMuscDVKm43Asu)
 
 <br>
 
