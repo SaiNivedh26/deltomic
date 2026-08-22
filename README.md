@@ -61,6 +61,13 @@
 
 <br>
 
+## What people think about deltomic
+
+<img width="1648" height="896" alt="Copy of pradee-menon" src="https://github.com/user-attachments/assets/1e5ae1ed-ee1a-49ce-a1cf-df08cd5d21b6" />
+
+
+<br>
+
 ## Core Features
 
 ### > Live Customer Session Workspace
